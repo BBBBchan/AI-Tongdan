@@ -171,7 +171,7 @@ bash start.sh
 | --- | --- |
 | 调整模型 API、音频、端口和其他参数 | [详细配置与使用指南](docs/configuration.md) |
 | 下载权重、部署视觉与音频模型 | [模型部署指南](docs/deployment.md) |
-| 绑定、更新或清除自己的 B 站 Cookie | [Cookie 绑定教程](docs/configuration.md#绑定自己的-bilibili-cookie) |
+| 导出、绑定、更新或清除自己的 B 站 Cookie | [本地导出脚本](get_bilibili_cookie.py) · [Cookie 绑定教程](docs/configuration.md#绑定自己的-bilibili-cookie) |
 | 标记主播声音、改名或合并说话人 | [声音与记忆](docs/configuration.md#声音说话人和记忆) |
 | 备份数据、更新应用、处理运行问题 | [配置指南](docs/configuration.md#数据保存恢复与清理) · [常见问题](docs/configuration.md#常见问题) |
 | 使用 Logo 或了解 GIF 录制方式 | [品牌资产](docs/branding.md) · [演示素材](docs/assets/README.md) |

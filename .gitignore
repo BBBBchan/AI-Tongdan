@@ -14,6 +14,7 @@ __pycache__/
 /models/
 /test-results/
 *.private.*
+bilibili_cookie*.txt
 *.pem
 *.key
 *.p12

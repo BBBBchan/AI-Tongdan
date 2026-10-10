@@ -345,6 +345,48 @@ Web 应用、视觉服务与音频服务是独立进程，停止 Web 不会自�
 
 ### 获取本人 Cookie
 
+#### 方法一：用本地脚本导出
+
+仓库根目录提供 [get_bilibili_cookie.py](../get_bilibili_cookie.py)。先在浏览器登录自己的 B 站账号，然后在**这台浏览器所在的电脑和系统**运行脚本。应用部署在远程服务器时，仍在自己的电脑导出，再把文件内容粘贴到应用页面；远程服务器无法直接读取本机浏览器 Cookie。
+
+在终端进入脚本所在文件夹，逐行执行：
+
+```bash
+python3 -m pip install -U browser-cookie3
+python3 get_bilibili_cookie.py --browser chrome
+```
+
+**Windows 浏览器请在 Windows 的 PowerShell 中运行此脚本**，不要在 WSL / Ubuntu 内读取 Windows 浏览器。需要 Windows 自己安装的 Python；如果 `python3` 不可用，把上面两行中的 `python3` 都换成 `python`。只需将这个脚本下载到 Windows 的文件夹，无需在 Windows 重新安装整套应用。
+
+Linux / macOS 若提示系统 Python 不允许安装包，可先创建并启用独立环境，再执行上面两行：
+
+```bash
+python3 -m venv .venv-cookie
+source .venv-cookie/bin/activate
+```
+
+成功后，当前文件夹会出现 **`bilibili_cookie.txt`**。用文本编辑器打开，复制里面的整行内容，按下方“通过网页绑定”粘贴到 **参与直播间 → 配置本人登录**。脚本不会在终端打印 Cookie，默认也**不会覆盖已有输出文件**。
+
+按需选择参数：
+
+| 参数 | 用法 |
+| --- | --- |
+| `--browser` | 默认 `chrome`；也可填 `edge`、`firefox`、`safari`、`brave` 或 `chromium`，选择实际登录的浏览器。 |
+| `--cookie-file` | 可选，指定对应浏览器配置的 Cookie 数据库文件路径；路径有空格时加引号，用于选择非默认配置。 |
+| `--output` | 可选，指定新的输出文件名或路径；例如 `bilibili_cookie_firefox.txt`。目标目录需要已经存在。 |
+
+例如，导出 Firefox 的登录信息并另存为新文件：
+
+```bash
+python3 get_bilibili_cookie.py --browser firefox --output bilibili_cookie_firefox.txt
+```
+
+脚本只在本地读取、筛选并保存 Cookie，**不会发起网络请求，也不会验证登录是否仍有效**。它要求存在 `SESSDATA` 才保存；应用发送弹幕还需要 `bili_jct`。仓库已忽略 `bilibili_cookie*.txt`；使用其他输出名称时，也不要把登录文件提交到 Git。
+
+读取失败时，先确认选择了正确浏览器与已登录的配置，可关闭浏览器后重试。若系统询问钥匙串访问，确认请求来自自己刚运行的 Python。浏览器加密机制可能使库无法读取；此时直接使用下面的手动方式。
+
+#### 方法二：通过浏览器开发者工具复制
+
 以 Chrome / Edge 为例：
 
 1. 在自己信任的浏览器打开 [Bilibili 直播](https://live.bilibili.com/)，正常登录本人账号。

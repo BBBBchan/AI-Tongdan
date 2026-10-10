@@ -1,6 +1,6 @@
 # Third-party notices and project provenance
 
-VTuber-Delta is maintained by **BBBBchan**. The application and documentation contributed by this project are licensed under **Creative Commons Attribution-NonCommercial 4.0 International (CC BY-NC 4.0)**, as provided in the root [LICENSE](LICENSE). Commercial use of that material is not permitted under this license.
+AI同担 is maintained by **BBBBchan**. The application and documentation contributed by this project are licensed under **Creative Commons Attribution-NonCommercial 4.0 International (CC BY-NC 4.0)**, as provided in the root [LICENSE](LICENSE). Commercial use of that material is not permitted under this license.
 
 Third-party components retain their own attribution and licenses. The project's noncommercial license does not replace the licenses of independently licensed components, dependencies or model weights.
 
@@ -20,7 +20,7 @@ The following files were copied unchanged. Original relative paths and SHA256 ch
 | `core/tools/memory.py` | `vendor/deltastreamer/memory.py` |
 | `core/tools/memory_graph.py` | `vendor/deltastreamer/memory_graph.py` |
 
-VTuber-Delta adds the Bilibili connection, continuous asynchronous observations and repeated Q&A, audio processing and manual source labels, time-aligned memory updates, danmaku suggestions and sending, browser UI, persistence, deployment scripts and tests. These application extensions are distinct from the three unchanged upstream memory files.
+AI同担 adds the Bilibili connection, continuous asynchronous observations and repeated Q&A, audio processing and manual source labels, time-aligned memory updates, danmaku suggestions and sending, browser UI, persistence, deployment scripts and tests. These application extensions are distinct from the three unchanged upstream memory files.
 
 The paper **DeltaStreamer: Towards Human-Like Agentic Streaming Video Understanding** is by Boyuan Sun, Deshui Miao, Wenzhao Gao, Shaoyong Jia, Shaohui Jiao, Chi Liu, Yan Shu, Derek Li, Bryan Dai, Shengsheng Qian and Qibin Hou (2026). Its complete citation is at the bottom of [README.md](README.md#citation). Paper authorship and upstream attribution are independent of this repository's Git contribution history.
 

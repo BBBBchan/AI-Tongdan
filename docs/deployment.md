@@ -23,8 +23,8 @@
 私有仓库必须先获得访问权限。通过自己配置好的 GitHub SSH 身份下载：
 
 ```bash
-git clone git@github.com:BBBBchan/VTuber-Delta.git
-cd VTuber-Delta
+git clone git@github.com:BBBBchan/AI-Tongdan.git
+cd AI-Tongdan
 ```
 
 也可以在已登录 GitHub 的浏览器中下载 ZIP 并解压。仅从仓库取得源代码不会下载模型。后续命令除特别注明外，都在仓库根目录执行。

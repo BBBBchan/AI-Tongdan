@@ -1,11 +1,11 @@
 cff-version: 1.2.0
-message: "If you use VTuber-Delta in research, please cite the DeltaStreamer paper below."
+message: "If you use AI同担 in research, please cite the DeltaStreamer paper below."
 type: software
-title: VTuber-Delta
+title: "AI同担"
 authors:
   - name: BBBBchan
-repository-code: "https://github.com/BBBBchan/VTuber-Delta"
-url: "https://github.com/BBBBchan/VTuber-Delta"
+repository-code: "https://github.com/BBBBchan/AI-Tongdan"
+url: "https://github.com/BBBBchan/AI-Tongdan"
 license: CC-BY-NC-4.0
 preferred-citation:
   type: generic

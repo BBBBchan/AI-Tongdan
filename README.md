@@ -1,10 +1,12 @@
-# VTuber-Delta
+# AI同担
 
-**面向 VTuber 与 Bilibili 直播的持续理解助手：一边看直播、听声音、读弹幕，一边形成记忆、回答问题并生成互动弹幕。**
+**你知道吗，你的同担可能是AI。**
+
+AI同担陪你一起看直播，结合画面、声音和弹幕理解现场，记住精彩瞬间，随时回答你的问题，还能推荐贴合当下内容的候选弹幕，由你确认发送。一起追直播，一起聊喜欢的人和事。
 
 项目维护者：**[BBBBchan](https://github.com/BBBBchan)**。
 
-> **项目来源：DeltaStreamer。** VTuber-Delta 基于 [DeltaStreamer](https://github.com/BBBBchan/DeltaStreamer) 的结构化记忆核心，将其扩展为可持续运行的直播应用。**DeltaStreamer 原仓库目前为私有仓库，后续计划开放**；暂无访问权限时，链接显示 404 属于正常情况。本应用已经包含运行所需的三个记忆核心文件，不需要另外克隆原仓库。
+> **项目来源：DeltaStreamer。** AI同担基于 [DeltaStreamer](https://github.com/BBBBchan/DeltaStreamer) 的结构化记忆核心，将其扩展为可持续运行的直播应用。**DeltaStreamer 原仓库目前为私有仓库，后续计划开放**；暂无访问权限时，链接显示 404 属于正常情况。本应用已经包含运行所需的三个记忆核心文件，不需要另外克隆原仓库。
 >
 > 本项目采用 **[CC BY-NC 4.0 — 署名—非商业性使用 4.0 国际](LICENSE)**：**不允许商业用途**。原项目与第三方组件的署名、许可证及来源说明保留在 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) 和 [SOURCE_MANIFEST.json](SOURCE_MANIFEST.json)。论文引用见本文最末尾的 [Citation](#citation)。
 
@@ -119,8 +121,8 @@ flowchart TD
 
 ```bash
 gh auth login
-gh repo clone BBBBchan/VTuber-Delta
-cd VTuber-Delta
+gh repo clone BBBBchan/AI-Tongdan
+cd AI-Tongdan
 ```
 
 `gh auth login` 会引导交互式登录，不需要把访问令牌写入 README、Git remote URL 或应用配置。
@@ -130,18 +132,18 @@ cd VTuber-Delta
 如果 GitHub 账号已配置 SSH key：
 
 ```bash
-git clone git@github.com:BBBBchan/VTuber-Delta.git
-cd VTuber-Delta
+git clone git@github.com:BBBBchan/AI-Tongdan.git
+cd AI-Tongdan
 ```
 
 ### 方法三：HTTPS 或 ZIP
 
 ```bash
-git clone https://github.com/BBBBchan/VTuber-Delta.git
-cd VTuber-Delta
+git clone https://github.com/BBBBchan/AI-Tongdan.git
+cd AI-Tongdan
 ```
 
-HTTPS 使用本机 Git 凭据管理器完成认证。也可以在已登录且有权限的浏览器中打开 [仓库首页](https://github.com/BBBBchan/VTuber-Delta)，选择 **Code → Download ZIP**，解压后进入目录。
+HTTPS 使用本机 Git 凭据管理器完成认证。也可以在已登录且有权限的浏览器中打开 [仓库首页](https://github.com/BBBBchan/AI-Tongdan)，选择 **Code → Download ZIP**，解压后进入目录。
 
 ZIP 下载适合只运行应用；如果希望后续更新，建议使用 Git。私有仓库无权限时的 404 不表示下载命令有误。
 
@@ -648,7 +650,7 @@ data/
 ## 目录结构
 
 ```text
-VTuber-Delta/
+AI-Tongdan/
 ├── app/                        # 直播接入、任务调度、问答、音频与发送接口
 ├── static/                     # 无需构建的 Web UI 与 HLS.js
 ├── vendor/deltastreamer/        # 原项目记忆核心与许可证
@@ -773,7 +775,7 @@ configured=true 只代表填了配置。服务尚未加载完权重、GPU 显存
 - `core/tools/memory.py` → `vendor/deltastreamer/memory.py`
 - `core/tools/memory_graph.py` → `vendor/deltastreamer/memory_graph.py`
 
-具体 SHA256 与来源见 [SOURCE_MANIFEST.json](SOURCE_MANIFEST.json)。直播平台接入、异步调度、媒体链路、独立音频服务、问答适配、网页及弹幕功能在本仓库实现。VTuber-Delta 是基于原工作扩展的直播应用，不等同于原论文的完整评测管线。
+具体 SHA256 与来源见 [SOURCE_MANIFEST.json](SOURCE_MANIFEST.json)。直播平台接入、异步调度、媒体链路、独立音频服务、问答适配、网页及弹幕功能在本仓库实现。AI同担是基于原工作扩展的直播应用，不等同于原论文的完整评测管线。
 
 ### 非商业许可证
 

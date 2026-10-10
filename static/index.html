@@ -5,15 +5,16 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="dark">
   <meta name="theme-color" content="#0d1118">
-  <title>StreamDelta · 直播理解工作台</title>
-  <link rel="icon" href="data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%2040%2040%22%3E%3Crect%20width%3D%2240%22%20height%3D%2240%22%20rx%3D%229%22%20fill%3D%22%230d131c%22%2F%3E%3Cpath%20d%3D%22M20%207%206%2032h28z%22%20fill%3D%22none%22%20stroke%3D%22%23adedd3%22%20stroke-width%3D%223%22%2F%3E%3C%2Fsvg%3E">
-  <link rel="stylesheet" href="/static/app.css">
+  <title>AI同担—你的AI直播同担</title>
+  <link rel="icon" type="image/png" href="/static/brand/ai-tongdan-logo.png">
+  <link rel="apple-touch-icon" href="/static/brand/ai-tongdan-logo.png">
+  <link rel="stylesheet" href="/static/app.css?v=ai-tongdan-1">
   <script defer src="/static/vendor/hls.min.js"></script>
   <script defer src="/static/app.js"></script>
 </head>
 <body>
   <header class="topbar">
-    <a class="brand" href="/" aria-label="StreamDelta 首页"><span class="brand-mark" aria-hidden="true">Δ<span></span></span><span>Stream<span class="brand-light">Delta</span><small>LIVE WORKSPACE</small></span></a>
+    <a class="brand" href="/" aria-label="AI同担 首页"><img class="brand-logo" src="/static/brand/ai-tongdan-logo.png" width="40" height="40" alt=""><span>AI<span class="brand-light">同担</span><small>LIVE COMPANION</small></span></a>
     <div class="header-right"><span class="header-caption">看见变化，理解当下</span><button id="model-check" class="model-chip" title="检查模型服务连接"><span id="model-dot" class="status-dot"></span><span id="model-name">Qwen3.8 · 27B FP8</span><span id="model-status">待检查</span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 5l7 7-7 7"/></svg></button></div>
   </header>
   <main class="page-shell">
@@ -30,7 +31,7 @@
             <video id="live-video" controls playsinline autoplay muted aria-label="Bilibili 直播画面" hidden></video>
             <iframe id="official-player" title="Bilibili 官方直播播放器" allow="autoplay; fullscreen; picture-in-picture" referrerpolicy="strict-origin-when-cross-origin" allowfullscreen hidden></iframe>
             <div id="danmaku-overlay" class="danmaku-overlay" aria-hidden="true"></div>
-            <div class="player-placeholder" id="player-placeholder"><div class="signal-art" aria-hidden="true"><span class="signal-ring one"></span><span class="signal-ring two"></span><span class="signal-core"><svg viewBox="0 0 40 40"><rect x="7" y="11" width="26" height="20" rx="5"/><path d="M14 5l6 6 6-6M15 19v4m10-4v4"/></svg></span></div><h1 id="placeholder-title">连接直播，开始持续理解</h1><p id="placeholder-description">直播画面、实时弹幕，与始终在线的观察助手。</p><span class="placeholder-note" id="placeholder-note">观察持续进行，随时都能提问</span></div>
+            <div class="player-placeholder" id="player-placeholder"><div class="signal-art" aria-hidden="true"><span class="signal-ring one"></span><span class="signal-ring two"></span><span class="signal-core"><img src="/static/brand/ai-tongdan-logo.png" width="58" height="58" alt=""></span></div><h1 id="placeholder-title">连接直播，开始持续理解</h1><p id="placeholder-description">直播画面、实时弹幕，与始终在线的观察助手。</p><span class="placeholder-note" id="placeholder-note">观察持续进行，随时都能提问</span></div>
             <div id="playback-error" class="playback-error" hidden><span id="playback-error-text"></span><button id="fallback-button" class="quiet-button" type="button">切换官方播放器</button></div>
           </div>
           <div class="player-footer"><div class="room-info"><strong id="room-title">等待连接直播间</strong><span id="playback-info">连接后自动获取直播画面与弹幕</span></div><div class="player-actions"><button id="overlay-toggle" class="icon-button active" type="button" aria-pressed="true" title="显示 / 隐藏画面弹幕"><span class="dan-icon">弹</span><span>弹幕</span></button><div class="segmented player-mode" aria-label="播放器模式"><button id="native-mode" class="active" type="button" aria-pressed="true">直接播放</button><button id="official-mode" type="button" aria-pressed="false">官方</button></div></div></div>

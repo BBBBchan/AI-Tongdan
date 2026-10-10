@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="static/brand/ai-tongdan-logo.png" width="160" height="160" alt="AI同担 Logo：并肩的弹幕气泡与共享的播放三角" />
+</p>
+
 # AI同担
 
 **你知道吗，你的同担可能是AI。**
@@ -5,6 +9,8 @@
 AI同担陪你一起看直播，结合画面、声音和弹幕理解现场，记住精彩瞬间，随时回答你的问题，还能推荐贴合当下内容的候选弹幕，由你确认发送。一起追直播，一起聊喜欢的人和事。
 
 项目维护者：**[BBBBchan](https://github.com/BBBBchan)**。
+
+[Logo 原图](static/brand/ai-tongdan-logo.png) · [设计与使用说明](docs/branding.md)
 
 > **项目来源：DeltaStreamer。** AI同担基于 [DeltaStreamer](https://github.com/BBBBchan/DeltaStreamer) 的结构化记忆核心，将其扩展为可持续运行的直播应用。**DeltaStreamer 原仓库目前为私有仓库，后续计划开放**；暂无访问权限时，链接显示 404 属于正常情况。本应用已经包含运行所需的三个记忆核心文件，不需要另外克隆原仓库。
 >

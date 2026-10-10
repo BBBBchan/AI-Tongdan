@@ -261,7 +261,7 @@
     const nearBottom = panel.scrollHeight - panel.scrollTop - panel.clientHeight < 100;
     const nodes = messages.map((message) => {
       const user = message.role === 'user'; const node = make('article',`message ${user ? 'user' : 'assistant'}`);
-      const meta = make('div','message-meta'); meta.append(make('span','message-avatar',user ? '你' : 'Δ'), make('span','',user ? '你' : 'StreamDelta')); node.append(meta);
+      const meta = make('div','message-meta'); meta.append(make('span','message-avatar',user ? '你' : 'Δ'), make('span','',user ? '你' : 'AI同担')); node.append(meta);
       const content = plain(message.text ?? message.content ?? message.answer);
       const working = activeStatuses.has(message.status);
       node.append(make('div','message-content',content || (working ? '正在结合当前画面与记忆思考…' : '')));

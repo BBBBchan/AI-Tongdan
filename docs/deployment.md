@@ -1,8 +1,12 @@
-# 从下载代码到独立部署
+# AI同担：GPU 模型完整部署指南
+
+[返回项目首页](../README.md) · [详细配置与使用](configuration.md) · [连接已有模型 API](configuration.md#model-api) · [绑定 Cookie](configuration.md#bilibili-cookie) · [常见问题](#10-常见问题)
+
+只想先打开网页或使用已有模型接口，请从[安装并启动应用](configuration.md#install)开始；本页面向需要自己下载权重、运行视觉与音频模型服务的部署者。
 
 本文面向新机器，不依赖作者的服务地址、任务调度平台、Python 环境或已下载权重。应用服务器可以运行在 Linux/macOS；本文提供的两个模型服务使用 Linux + NVIDIA CUDA。macOS 可运行网页、取流、抽帧与音频处理，再通过网络连接 Linux 上的模型服务。
 
-仓库只包含源代码、配置模板和第三方许可。模型权重、API 密钥、B 站 Cookie、会话数据、虚拟环境和运行日志都由部署者自行生成。Cookie 设置见 [绑定自己的 Bilibili Cookie](../README.md#绑定自己的-bilibili-cookie)。模型服务与主应用是三个独立进程，安装时使用三个独立虚拟环境。
+仓库只包含源代码、配置模板和第三方许可。模型权重、API 密钥、B 站 Cookie、会话数据、虚拟环境和运行日志都由部署者自行生成。Cookie 设置见 [绑定自己的 Bilibili Cookie](configuration.md#bilibili-cookie)。模型服务与主应用是三个独立进程，安装时使用三个独立虚拟环境。
 
 ## 1. 先决定运行哪些组件
 
@@ -382,7 +386,7 @@ PY
 
 打开网页并输入自己要观察的、正在直播的房间。分别确认房间状态、播放画面、弹幕连接、连续视觉观察、音频块和问答；仅播放器有画面并不代表模型功能已连通。对照画面与实际声音检查一段观察和一次问答，确认回答里的视觉/音频证据来自相应时间窗口。
 
-游客取流或弹幕连接被平台拒绝时，再按 [绑定自己的 Bilibili Cookie](../README.md#绑定自己的-bilibili-cookie) 配置自己的登录 Cookie。网页上的“听到什么”与“谁在说话”是不同判断；先匿名观察，再显式绑定已确认的角色。
+游客取流或弹幕连接被平台拒绝时，再按 [绑定自己的 Bilibili Cookie](configuration.md#bilibili-cookie) 配置自己的登录 Cookie。网页上的“听到什么”与“谁在说话”是不同判断；先匿名观察，再显式绑定已确认的角色。
 
 ## 9. 日常运行、数据与更新
 

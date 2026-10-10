@@ -1,0 +1,24 @@
+{
+  "source": "https://github.com/BBBBchan/DeltaStreamer",
+  "commit": "b60625d8f14f7622c504b642178ec8be07a00e4d",
+  "files": [
+    {
+      "source": "core/tools/base.py",
+      "target": "vendor/deltastreamer/base.py",
+      "sha256": "bac162400317c4eeb5ff2a53d5ac3d813d9a95e40b9ddcb9a7b65aa3b27d2247"
+    },
+    {
+      "source": "core/tools/memory.py",
+      "target": "vendor/deltastreamer/memory.py",
+      "sha256": "ad7755cc0364a0af306e62f8e5fe5a070d4b0fa0c740af6da18716c26d9e87b5"
+    },
+    {
+      "source": "core/tools/memory_graph.py",
+      "target": "vendor/deltastreamer/memory_graph.py",
+      "sha256": "f3e5ef7c6c61fbedc7d6cdc9daaa0b7e80ea2298b693f823eb2cc46acc3127a6"
+    }
+  ],
+  "note": "Three DeltaStreamer memory core files copied unchanged from the specified commit. Live Bilibili integration, asynchronous observation and Q&A, audio, danmaku features and web UI are implemented in this repository. See THIRD_PARTY_NOTICES.md.",
+  "availability": "Upstream repository is currently private; public release is planned.",
+  "license": "CC-BY-NC-4.0"
+}

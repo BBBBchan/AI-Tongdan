@@ -1,0 +1,36 @@
+cff-version: 1.2.0
+message: "If you use VTuber-Delta in research, please cite the DeltaStreamer paper below."
+type: software
+title: VTuber-Delta
+authors:
+  - name: BBBBchan
+repository-code: "https://github.com/BBBBchan/VTuber-Delta"
+url: "https://github.com/BBBBchan/VTuber-Delta"
+license: CC-BY-NC-4.0
+preferred-citation:
+  type: generic
+  title: "DeltaStreamer: Towards Human-Like Agentic Streaming Video Understanding"
+  year: 2026
+  authors:
+    - family-names: Sun
+      given-names: Boyuan
+    - family-names: Miao
+      given-names: Deshui
+    - family-names: Gao
+      given-names: Wenzhao
+    - family-names: Jia
+      given-names: Shaoyong
+    - family-names: Jiao
+      given-names: Shaohui
+    - family-names: Liu
+      given-names: Chi
+    - family-names: Shu
+      given-names: Yan
+    - family-names: Li
+      given-names: Derek
+    - family-names: Dai
+      given-names: Bryan
+    - family-names: Qian
+      given-names: Shengsheng
+    - family-names: Hou
+      given-names: Qibin

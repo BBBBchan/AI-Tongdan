@@ -1,0 +1,4 @@
+# Install into a fresh Linux CUDA virtual environment, separate from audio.
+# vLLM selects its compatible torch/torchaudio/torchvision wheel versions.
+vllm==0.19.1
+transformers==5.8.0

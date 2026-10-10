@@ -1,0 +1,19 @@
+# Install matching torch and torchaudio CUDA wheels first; see docs/deployment.md.
+torch==2.10.0
+torchaudio==2.10.0
+qwen-asr==0.0.6
+transformers==4.57.6
+accelerate==1.12.0
+librosa==0.11.0
+soundfile==0.14.0
+sox==1.5.0
+qwen-omni-utils==0.0.9
+nagisa==0.2.11
+soynlp==0.0.493
+silero-vad==6.2.3
+numpy>=1.26,<3
+scipy>=1.13,<2
+fastapi>=0.115,<1
+uvicorn>=0.34,<1
+# Used by the optional CPU request-boundary checks, not GPU inference.
+httpx>=0.28,<1

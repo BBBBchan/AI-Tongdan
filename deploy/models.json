@@ -1,0 +1,20 @@
+{
+  "vision": {
+    "repo": "Qwen/Qwen3.8-27B-FP8",
+    "revision": "017b9c7af6b5689d5dd426a76e0bc077eb5ca20a",
+    "directory": "Qwen3.8-27B-FP8",
+    "license": "Apache-2.0"
+  },
+  "asr": {
+    "repo": "Qwen/Qwen3-ASR-0.6B",
+    "revision": "5eb144179a02acc5e5ba31e748d22b0cf3e303b0",
+    "directory": "Qwen3-ASR-0.6B",
+    "license": "Apache-2.0"
+  },
+  "speaker": {
+    "repo": "funasr/campplus",
+    "revision": "e4b6ede7ce16997aff4ae69fbca1f0175e2afede",
+    "directory": "campplus",
+    "license": "Apache-2.0"
+  }
+}

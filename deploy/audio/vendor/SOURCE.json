@@ -1,0 +1,10 @@
+{
+  "repo": "https://github.com/modelscope/3D-Speaker",
+  "revision": "065629c313eaf1a01c65c640c46d77e61e9607b4",
+  "sha256": {
+    "speakerlab/models/campplus/DTDNN.py": "52272359361ef9f03a8b4198f50139301ce712833e777396940a5b437177cd34",
+    "speakerlab/models/campplus/layers.py": "b3d28ad94d14b30fcd20c96d1d83516d4e44de733959460b358e90d97476adb8",
+    "LICENSE": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4"
+  },
+  "license": "Apache-2.0"
+}

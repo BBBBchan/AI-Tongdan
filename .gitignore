@@ -1,0 +1,45 @@
+# Local environments and settings
+.venv*/
+.env
+.env.*
+!.env.example
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+*.py[cod]
+.DS_Store
+
+# User recordings, model weights, runtime endpoints, cookies and voice references
+/data/
+/models/
+/test-results/
+*.private.*
+*.pem
+*.key
+*.p12
+*.pfx
+api_key*.txt
+*_api_key.txt
+**/secrets/
+*_endpoint.json
+endpoint*.json
+*.safetensors
+*.bin
+*.pt
+*.pth
+*.onnx
+
+# Historical machine-specific deployment; portable source is in deploy/
+/deployment/
+**/runtime/
+**/private/
+**/cache/
+*.log
+*.jsonl
+*.tmp
+*.wav
+*.mp3
+*.mp4
+*.flv
+*.m3u8
+*.zip

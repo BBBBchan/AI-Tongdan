@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <meta name="theme-color" content="#0d1118">
+  <title>StreamDelta · 直播理解工作台</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%2040%2040%22%3E%3Crect%20width%3D%2240%22%20height%3D%2240%22%20rx%3D%229%22%20fill%3D%22%230d131c%22%2F%3E%3Cpath%20d%3D%22M20%207%206%2032h28z%22%20fill%3D%22none%22%20stroke%3D%22%23adedd3%22%20stroke-width%3D%223%22%2F%3E%3C%2Fsvg%3E">
+  <link rel="stylesheet" href="/static/app.css">
+  <script defer src="/static/vendor/hls.min.js"></script>
+  <script defer src="/static/app.js"></script>
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="/" aria-label="StreamDelta 首页"><span class="brand-mark" aria-hidden="true">Δ<span></span></span><span>Stream<span class="brand-light">Delta</span><small>LIVE WORKSPACE</small></span></a>
+    <div class="header-right"><span class="header-caption">看见变化，理解当下</span><button id="model-check" class="model-chip" title="检查模型服务连接"><span id="model-dot" class="status-dot"></span><span id="model-name">Qwen3.8 · 27B FP8</span><span id="model-status">待检查</span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 5l7 7-7 7"/></svg></button></div>
+  </header>
+  <main class="page-shell">
+    <section class="source-bar" aria-label="直播间连接">
+      <div class="source-label"><span class="source-symbol" aria-hidden="true">↗</span><div><strong>连接直播间</strong><span>BILIBILI LIVE</span></div></div>
+      <form id="room-form" class="room-form"><label for="room-input" class="sr-only">Bilibili 直播间地址或房间号</label><div class="room-input-wrap"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 13a5 5 0 007 .5l3-3a5 5 0 00-7-7l-1.7 1.7M14 11a5 5 0 00-7-.5l-3 3a5 5 0 007 7l1.7-1.7"/></svg><input id="room-input" type="text" value="https://live.bilibili.com/732" placeholder="粘贴直播间地址，或输入房间号" autocomplete="off" spellcheck="false" required><kbd>↵</kbd></div><button id="connect-button" class="primary-button" type="submit"><span id="connect-label">连接直播</span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14m-6-6l6 6-6 6"/></svg></button><button id="stop-button" class="quiet-button" type="button" disabled>断开</button></form>
+    </section>
+    <div id="notice" class="notice" role="status" hidden><span id="notice-text"></span><button id="notice-close" aria-label="关闭提示">×</button></div>
+    <div class="workspace">
+      <section class="watch-column" aria-label="直播与弹幕">
+        <div class="panel player-panel">
+          <div class="panel-heading player-heading"><div class="live-label"><span id="room-dot" class="status-dot"></span><span id="room-status">尚未连接</span><span class="divider"></span><span id="room-id">Bilibili</span></div><a id="open-room" class="text-link" href="https://live.bilibili.com/732" target="_blank" rel="noopener noreferrer">打开原直播间 <span aria-hidden="true">↗</span></a></div>
+          <div class="video-stage" id="video-stage">
+            <video id="live-video" controls playsinline autoplay muted aria-label="Bilibili 直播画面" hidden></video>
+            <iframe id="official-player" title="Bilibili 官方直播播放器" allow="autoplay; fullscreen; picture-in-picture" referrerpolicy="strict-origin-when-cross-origin" allowfullscreen hidden></iframe>
+            <div id="danmaku-overlay" class="danmaku-overlay" aria-hidden="true"></div>
+            <div class="player-placeholder" id="player-placeholder"><div class="signal-art" aria-hidden="true"><span class="signal-ring one"></span><span class="signal-ring two"></span><span class="signal-core"><svg viewBox="0 0 40 40"><rect x="7" y="11" width="26" height="20" rx="5"/><path d="M14 5l6 6 6-6M15 19v4m10-4v4"/></svg></span></div><h1 id="placeholder-title">连接直播，开始持续理解</h1><p id="placeholder-description">直播画面、实时弹幕，与始终在线的观察助手。</p><span class="placeholder-note" id="placeholder-note">观察持续进行，随时都能提问</span></div>
+            <div id="playback-error" class="playback-error" hidden><span id="playback-error-text"></span><button id="fallback-button" class="quiet-button" type="button">切换官方播放器</button></div>
+          </div>
+          <div class="player-footer"><div class="room-info"><strong id="room-title">等待连接直播间</strong><span id="playback-info">连接后自动获取直播画面与弹幕</span></div><div class="player-actions"><button id="overlay-toggle" class="icon-button active" type="button" aria-pressed="true" title="显示 / 隐藏画面弹幕"><span class="dan-icon">弹</span><span>弹幕</span></button><div class="segmented player-mode" aria-label="播放器模式"><button id="native-mode" class="active" type="button" aria-pressed="true">直接播放</button><button id="official-mode" type="button" aria-pressed="false">官方</button></div></div></div>
+        </div>
+        <div class="live-signals">
+          <section class="panel audio-panel" aria-label="声音与实时字幕">
+            <div class="panel-heading"><h2><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 10v4m4-8v12m4-15v18m4-15v12m4-8v4"/></svg>声音与字幕 <span id="audio-count" class="count-badge">0</span></h2><span id="audio-badge" class="observer-badge"><span class="status-dot"></span><span id="audio-status">等待音轨</span></span></div>
+            <div class="audio-toolbar"><div id="audio-speakers" class="audio-speakers" aria-label="已发现的说话人"><span class="audio-speakers-empty">等待识别说话人</span></div><label class="sr-only" for="audio-filter">按说话人筛选字幕</label><select id="audio-filter" class="audio-filter"><option value="">全部声音</option><option value="__unknown__">未知说话人</option></select></div>
+            <div id="audio-segments" class="audio-segments" aria-live="off"><div class="audio-empty"><span aria-hidden="true">♫</span><strong>听见直播里的声音</strong><p>转写完成后，字幕和说话人分组会显示在这里。</p></div></div>
+            <div id="audio-replay" class="audio-replay" hidden><div class="audio-replay-heading"><span id="audio-replay-title">片段回听</span><button id="audio-replay-close" type="button" aria-label="关闭片段回听">×</button></div><audio id="audio-replay-player" controls preload="none" aria-label="回听原始直播音频"></audio><p id="audio-replay-error" hidden role="status"></p></div>
+            <div class="audio-footer"><span id="audio-detail">语音识别与画面观察独立进行</span><span id="audio-dropped"></span></div>
+            <p class="audio-source-note">说话人分组不代表音源身份；同声纹可能来自麦克风或录播，重叠声音可能无法区分。</p>
+          </section>
+        <div class="panel danmaku-panel"><div class="panel-heading"><h2><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 11.5a8.5 8.5 0 01-8.5 8.5H4l-1 1V11.5A8.5 8.5 0 0121 11.5Z"/><path d="M7 9h10M7 13h6"/></svg>直播间动态 <span id="danmaku-count" class="count-badge">0</span></h2><span id="danmaku-status" class="subtle-status">等待连接</span></div><div id="danmaku-list" class="danmaku-list" aria-live="off"><div class="inline-empty" id="danmaku-empty"><span class="empty-lines" aria-hidden="true">≋</span><p>来自直播间的弹幕会显示在这里</p></div></div></div>
+        </div>
+        <section class="panel danmaku-compose-panel" aria-label="发送弹幕">
+          <div class="panel-heading"><h2>参与直播间</h2><span id="danmaku-send-status" class="subtle-status">尚未配置登录</span></div>
+          <div class="danmaku-compose-body">
+            <div class="danmaku-candidate-heading"><span>候选弹幕 · 点击填入，确认后发送</span><span id="danmaku-candidates-time"></span></div>
+            <div id="danmaku-candidates" class="danmaku-candidates"><span class="danmaku-candidate-empty">理解直播内容后，这里会更新 3 条候选。</span></div>
+            <form id="danmaku-send-form" class="danmaku-send-form"><label for="danmaku-send-input" class="sr-only">要发送到直播间的弹幕</label><input id="danmaku-send-input" type="text" maxlength="100" autocomplete="off" placeholder="编辑弹幕，点击发送到当前直播间"><button id="danmaku-send-button" class="primary-button" type="submit" disabled>发送弹幕</button></form>
+            <div class="danmaku-compose-actions"><button id="danmaku-copy-recent" class="quiet-button" type="button">复制近 2 秒随机弹幕</button><button id="danmaku-login-toggle" class="text-link" type="button" aria-expanded="false" aria-controls="danmaku-login-form">配置本人登录</button></div>
+            <p id="danmaku-send-feedback" class="danmaku-send-feedback" role="status" hidden></p>
+            <div id="danmaku-copy-fallback" hidden><label for="danmaku-copy-text">浏览器未允许复制，请复制下方已选中的文本：</label><textarea id="danmaku-copy-text" rows="2" readonly></textarea></div>
+            <form id="danmaku-login-form" class="danmaku-login-form" hidden><label for="danmaku-cookie">本人 Bilibili 登录 Cookie</label><textarea id="danmaku-cookie" rows="2" autocomplete="off" spellcheck="false" placeholder="粘贴本人的登录 Cookie，仅保存在本机"></textarea><div><span>用于你本人账号发送；保存后会清空此输入。</span><button id="danmaku-login-save" class="quiet-button" type="submit">保存登录</button></div></form>
+          </div>
+        </section>
+        <div class="watch-footnote"><span class="status-dot" id="events-dot"></span><span id="events-status">正在连接工作台</span><span class="footnote-right">持续观察 · 结构化记忆 · 多轮问答</span></div>
+      </section>
+      <aside class="assistant-column" aria-label="直播理解助手">
+        <section class="panel understanding-panel"><div class="panel-heading intelligence-heading"><h2><span class="spark-icon" aria-hidden="true">✧</span>实时理解</h2><span id="observer-badge" class="observer-badge"><span class="status-dot"></span><span id="observer-status">等待直播</span></span></div><div class="understanding-tabs" role="tablist" aria-label="理解记录"><button id="activity-tab" class="active" role="tab" aria-selected="true" aria-controls="activity-panel" type="button">观察与变化 <span id="observation-count">0</span></button><button id="memory-tab" role="tab" aria-selected="false" aria-controls="memory-panel" type="button">记忆 <span id="memory-count">0</span></button><span id="observation-time" class="observation-time">持续记录</span></div><div id="activity-panel" class="activity-list" role="tabpanel" aria-labelledby="activity-tab"><div id="activity-empty" class="assistant-empty"><span class="empty-orbit" aria-hidden="true">✧</span><strong>捕捉每一次变化</strong><p>连接后，助手将持续观察画面，<br>把画面、声音和弹幕的变化写入记忆。</p><span>回答你的问题时，观察也会继续。</span></div></div><div id="memory-panel" class="memory-list" role="tabpanel" aria-labelledby="memory-tab" hidden></div><div class="observer-footer"><span id="observer-detail">观察任务与问答独立运行</span><span id="dropped-frames"></span></div></section>
+        <section class="panel conversation-panel"><div class="panel-heading"><h2><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 15a3 3 0 01-3 3H9l-5 3V6a3 3 0 013-3h10a3 3 0 013 3Z"/><path d="M8 8h8M8 12h5"/></svg>随时问问</h2><span id="chat-status" class="subtle-status">共享直播记忆</span></div><div id="messages" class="messages" aria-live="polite" aria-relevant="additions text"><div id="chat-empty" class="chat-empty"><p>关于直播的任何问题，<br>都可以从这里开始。</p><div class="suggestions"><button type="button" data-question="刚才发生了什么？">刚才发生了什么？ <span>↗</span></button><button type="button" data-question="总结一下目前直播的内容。">总结目前的直播内容 <span>↗</span></button></div></div></div><form id="question-form" class="composer"><label for="question-input" class="sr-only">向直播助手提问</label><textarea id="question-input" rows="2" placeholder="询问当前画面，或回顾刚才的内容…" maxlength="2000" disabled></textarea><div class="composer-bottom"><span id="composer-hint">连接直播间后即可提问</span><button id="send-button" class="send-button" type="submit" disabled title="发送问题"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V5m-6 6l6-6 6 6"/></svg><span class="sr-only">发送问题</span></button></div></form></section>
+      </aside>
+    </div>
+  </main>
+  <dialog id="speaker-dialog" class="model-dialog speaker-dialog"><div class="dialog-heading"><h2 id="speaker-dialog-title">说话人设置</h2><button id="speaker-dialog-close" class="icon-button" aria-label="关闭">×</button></div><p id="speaker-dialog-name"></p><p class="dialog-note">名称与来源参考会同步到记忆，供后续问答使用。同声纹不能证明实时麦克风或录播，单个片段的手动标记优先。</p><form id="speaker-label-form"><label for="speaker-label">显示名称</label><input id="speaker-label" class="speaker-label-input" maxlength="40" autocomplete="off" placeholder="例如：主播 / 视频旁白" required><label for="speaker-role">来源参考</label><select id="speaker-role" class="speaker-role"><option value="unknown">不确定 / 清除归属</option><option value="host">主播</option><option value="background">背景视频</option><option value="singing">歌声</option></select><p id="speaker-dialog-error" class="speaker-dialog-error" role="status" hidden></p><button id="speaker-save" class="primary-button" type="submit">保存并更新记忆</button></form><section class="speaker-merge-section"><h3>合并重复的说话人</h3><p class="dialog-note">如果同一声音被分成多个组，可以把当前组并入另一个组。</p><label for="speaker-merge-target">合并到</label><select id="speaker-merge-target" class="speaker-role"></select><p id="speaker-merge-preview" class="speaker-merge-preview"></p><p id="speaker-merge-error" class="speaker-dialog-error" role="status" hidden></p><button id="speaker-merge-button" type="button" class="quiet-button" disabled>合并当前说话人</button></section></dialog>
+  <dialog id="model-dialog" class="model-dialog"><div class="dialog-heading"><h2>模型服务</h2><button id="model-dialog-close" class="icon-button" aria-label="关闭">×</button></div><p id="model-dialog-text">正在检查模型服务…</p><pre id="model-dialog-detail" hidden></pre><p class="dialog-note">模型通过本地配置连接。视觉观察与问答共享服务，观察任务会持续运行。</p><button id="model-retry" class="primary-button" type="button">重新检查</button></dialog>
+</body>
+</html>

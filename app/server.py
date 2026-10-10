@@ -30,7 +30,7 @@ from .danmaku_send import DanmakuCredentials, DanmakuSender, DanmakuSendError
 from .events import EventBus
 from .journal import SessionJournal
 from .media import MediaCapture
-from .model import VisionModel
+from .model import ModelBusy, VisionModel
 
 
 class SessionRequest(BaseModel):
@@ -219,6 +219,9 @@ class Workspace:
                 observation_frames=self.settings.observation_frames,
                 observation_stride=self.settings.observation_stride,
                 observation_concurrency=self.settings.observation_concurrency,
+                adaptive_observation=self.settings.adaptive_observation,
+                observation_max_frames=self.settings.observation_max_frames,
+                observation_target_lag=self.settings.observation_target_lag,
                 session_clock_start=self.clock_start,
                 audio_alignment_wait_seconds=(self.settings.audio_alignment_wait_seconds
                     if self.settings.audio_enabled and self.settings.audio_config().get("base_url") else 0))
@@ -297,8 +300,32 @@ class Workspace:
     async def _candidate_loop(self, sid):
         """Refresh drafts from actual recent sources; never calls the send API."""
         previous = None
+        deferred_since = None
         while self.session and self.session["id"] == sid:
             started = time.monotonic()
+            allow_observations_busy = False
+            if self.settings.adaptive_observation and self.agent and self.model and self.model.configured:
+                observer = self.agent._observer_snapshot()
+                age = observer.get("understanding_age_seconds")
+                busy = (age is None or age > self.settings.observation_target_lag * 0.65
+                        or observer.get("active_questions", 0)
+                        or not getattr(self.model, "background_available", True))
+                if busy:
+                    if deferred_since is None:
+                        deferred_since = started
+                    # Yield normally, but do not permanently disable drafts on
+                    # a slower machine. At most one bounded background request
+                    # may join busy observations after 30s; questions still win.
+                    if started - deferred_since < 30 or observer.get("active_questions", 0):
+                        if self.danmaku_candidates.get("status") != "deferred":
+                            self.danmaku_candidates = {**self.danmaku_candidates, "status": "deferred", "error": None}
+                            await self.emit("danmaku_candidates", dict(self.danmaku_candidates))
+                        await asyncio.sleep(2)
+                        continue
+                    allow_observations_busy = True
+                    deferred_since = started
+                else:
+                    deferred_since = None
             context = candidate_context(self.snapshot(), source_time=time.monotonic() - self.clock_start)
             signature = json.dumps(context, ensure_ascii=False, sort_keys=True)
             if not self.room or self.room.live_status != 1 or not self.model or not self.model.configured or not any(
@@ -312,7 +339,8 @@ class Workspace:
                 await self.emit("danmaku_candidates", dict(self.danmaku_candidates))
                 try:
                     texts = await asyncio.wait_for(generate_candidates(self.model, context,
-                        max_length=self.danmaku_credentials.status()["max_length"]), timeout=10)
+                        max_length=self.danmaku_credentials.status()["max_length"],
+                        allow_observations_busy=allow_observations_busy), timeout=10)
                     if not self.session or self.session["id"] != sid:
                         return
                     self.danmaku_candidates = {"items": [{"id": uuid.uuid4().hex, "text": text}
@@ -323,6 +351,8 @@ class Workspace:
                     previous = signature
                 except asyncio.CancelledError:
                     raise
+                except ModelBusy:
+                    self.danmaku_candidates = {**self.danmaku_candidates, "status": "deferred", "error": None}
                 except Exception:
                     self.danmaku_candidates = {**self.danmaku_candidates, "status": "error",
                         "error": "候选暂未更新，稍后自动重试；可以直接编辑弹幕。"}
@@ -486,7 +516,10 @@ def create_app(settings=None):
                 "audio": {"enabled": workspace.settings.audio_enabled,
                           "configured": bool(workspace.settings.audio_config()["base_url"])},
                 "observation_stride": workspace.settings.observation_stride,
-                "observation_concurrency": workspace.settings.observation_concurrency}
+                "observation_concurrency": workspace.settings.observation_concurrency,
+                "adaptive_observation": workspace.settings.adaptive_observation,
+                "observation_max_frames": workspace.settings.observation_max_frames,
+                "observation_target_lag": workspace.settings.observation_target_lag}
 
     @app.get("/api/state")
     async def state():

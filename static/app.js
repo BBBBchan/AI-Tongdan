@@ -11,6 +11,7 @@
   let speakerActionBusy = false, speakerMergeOptionsSignature = '';
   let danmakuSending = false, danmakuCredentialsSaving = false, danmakuCandidatesSignature = '';
   let recentDanmaku = [];
+  let understandingSample = null, understandingSourceWatermark = null;
   let audioFilter = '', audioSpeakerSignature = '', activeSpeakerId = null, activeSpeakerSession = null, activeReplayId = null, restoreVideoUnmuted = false;
   const audioRows = new Map(), audioSaving = new Set();
   const audioRoleNames = {unknown:'来源不确定',host:'主播',background:'背景视频',singing:'歌声'};
@@ -44,6 +45,7 @@
   function resetSession() {
     pendingQuestions.clear(); localDrafts.clear(); questionPlans.clear(); openedPlans.clear(); openedAudioEvidence.clear(); danmakuTotal = 0;
     state.observations = []; state.messages = []; state.danmaku = []; state.memory = {}; state.observer = {};
+    understandingSample = null; understandingSourceWatermark = null;
     state.danmaku_candidates = {}; danmakuCandidatesSignature = ''; recentDanmaku = []; $('danmaku-copy-fallback').hidden = true;
     $('danmaku-overlay').replaceChildren();
     stopAudioReplay(); audioRows.clear(); audioSaving.clear(); audioFilter = ''; audioSpeakerSignature = ''; state.audio = {segments: [], speakers: []};
@@ -56,6 +58,8 @@
     if (data.session?.id && state.session.id && data.session.id !== state.session.id) resetSession();
     for (const key of ['session','room','playback','observer','memory','model','danmaku_status','danmaku_send','danmaku_candidates','audio']) if (isObject(data[key])) state[key] = data[key];
     for (const key of ['observations','messages','danmaku']) if (Array.isArray(data[key])) state[key] = data[key];
+    if (isObject(data.observer)) sampleUnderstandingState(data.observer,true);
+    if (Array.isArray(data.observations)) rememberObservationSources(data.observations);
     for (const message of state.messages) { const qid = message.question_id; if (qid && message.role === 'assistant' && message.status && !activeStatuses.has(message.status)) { pendingQuestions.delete(qid); localDrafts.delete(qid); } }
     danmakuTotal = Math.max(danmakuTotal, state.danmaku.length);
     renderAll();
@@ -109,13 +113,62 @@
     $('observer-status').textContent = observerNames[status] || status;
     $('observer-badge').classList.toggle('running', running);
     setDot($('observer-badge').querySelector('.status-dot'), running ? 'good' : status === 'error' ? 'bad' : ['waiting','waiting_model','retrying','unconfigured','disabled','unavailable'].includes(status) ? 'warn' : '');
-    const batchInfo = observer.observation_frames ? `${observer.observation_frames} 帧窗口 · ${observer.observation_concurrency || 1} 路异步观察` : '观察任务与问答独立运行';
+    const frameCount = observer.adaptive_frame_count ?? observer.observation_frames;
+    const batchInfo = frameCount ? `${frameCount} 帧窗口 · ${observer.observation_concurrency || 1} 路异步观察` : '观察任务与问答独立运行';
     const lag = Number(observer.completion_lag);
     $('observer-detail').textContent = observer.error ? shortened(observer.error, 160) : batchInfo + (observer.completion_lag != null && Number.isFinite(lag) ? ` · 处理滞后 ${lag.toFixed(1)} 秒` : '');
     $('observer-detail').title = plain(observer.error);
     $('dropped-frames').textContent = [observer.dropped_frames ? `跳过 ${observer.dropped_frames} 帧` : '', observer.stale_results ? `丢弃 ${observer.stale_results} 个迟到结果` : ''].filter(Boolean).join(' · ');
     const timestamp = observer.last_timestamp ?? contentRange([...list(state.observations)].sort(compareContentTime).at(-1))?.end;
     $('observation-time').textContent = timestamp !== undefined && timestamp !== null ? `内容 ${formatTime(timestamp)}` : '持续记录';
+    renderUnderstandingTiming();
+  }
+  function understandingAge() {
+    return understandingSample ? understandingSample.age + Math.max(0,performance.now() - understandingSample.sampledAt) / 1000 : null;
+  }
+  function sampleUnderstandingState(observer,complete = false) {
+    if (!Object.hasOwn(observer,'understanding_age_seconds')) { if (complete) understandingSample = null; return; }
+    const age = finiteTime(observer.understanding_age_seconds), source = finiteTime(observer.source_received_at);
+    if (age === null) { understandingSample = null; return; }
+    if (source !== null && understandingSample?.sourceReceivedAt != null && source < understandingSample.sourceReceivedAt) return;
+    const previousAge = understandingAge();
+    const sourceAgeFloor = source !== null && understandingSample?.sourceReceivedAt != null ? understandingSample.sourceReceivedAt + previousAge - source : 0;
+    // Repeated status snapshots for one observation must not make it younger.
+    const sameSource = understandingSample && source === understandingSample.sourceReceivedAt;
+    // A delayed snapshot may describe a newer source while its sampled age is old.
+    understandingSample = {age:Math.max(0,age,sourceAgeFloor,sameSource ? previousAge : 0),sampledAt:performance.now(),sourceReceivedAt:source};
+    if (source !== null) understandingSourceWatermark = Math.max(understandingSourceWatermark ?? source,source);
+  }
+  function isVisualObservation(entry) { return entry.frame_count > 0 || (entry.kind === 'observation' && entry.frame_count !== 0); }
+  function rememberObservationSources(entries) {
+    for (const entry of entries) {
+      const source = finiteTime(entry.source_received_at);
+      if (isVisualObservation(entry) && source !== null) understandingSourceWatermark = Math.max(understandingSourceWatermark ?? source,source);
+    }
+  }
+  function sampleUnderstandingObservation(entry,eventTime) {
+    if (!isVisualObservation(entry)) return;
+    const source = finiteTime(entry.source_received_at), generated = finiteTime(entry.generated_at);
+    if (source === null || generated === null || source > generated || (understandingSourceWatermark !== null && source <= understandingSourceWatermark)) return;
+    // Use server wall times only. The browser's clock may differ from the server's.
+    const estimatedServerNow = understandingSample?.sourceReceivedAt == null ? generated : understandingSample.sourceReceivedAt + understandingAge();
+    const age = Math.max(generated,finiteTime(eventTime) ?? generated,estimatedServerNow) - source;
+    understandingSample = {age:Math.max(0,age),sampledAt:performance.now(),sourceReceivedAt:source};
+    understandingSourceWatermark = source;
+    if (finiteTime(entry.update_interval_seconds) !== null) state.observer.observed_update_interval_seconds = Number(entry.update_interval_seconds);
+    if (finiteTime(entry.target_lag_seconds) !== null) state.observer.target_lag_seconds = Number(entry.target_lag_seconds);
+  }
+  function renderUnderstandingTiming() {
+    const observer = state.observer || {}, age = understandingAge(), target = finiteTime(observer.target_lag_seconds) ?? 15;
+    const running = sessionActive(), stopped = Boolean(state.session.id) && !running;
+    const status = stopped ? 'stopped' : age === null ? 'waiting' : age > target ? 'overdue' : 'fresh';
+    const node = $('understanding-timing');
+    node.dataset.freshness = status;
+    node.dataset.ageSeconds = age === null ? '' : age.toFixed(3);
+    $('understanding-age').textContent = stopped ? '观察已停止 · 保留已有记录' : age === null ? `等待新的观察 · 目标 ${target} 秒` : `理解落后 ${age.toFixed(1)} 秒 · 目标 ${target} 秒${status === 'overdue' ? ' · 已超出目标' : ''}`;
+    const interval = finiteTime(observer.observed_update_interval_seconds), frames = finiteTime(observer.adaptive_frame_count);
+    $('understanding-cadence').textContent = [interval === null ? '更新间隔待统计' : `上次更新间隔 ${interval.toFixed(1)} 秒`,frames !== null ? `${observer.adaptive_observation ? '自适应 ' : ''}${frames} 帧观察` : ''].filter(Boolean).join(' · ');
+    node.title = '理解落后：当前已输出观察对应末帧被本机收到后经过的时间；不使用媒体 PTS，也不包含平台上游延迟。上次更新间隔：最近两次画面理解实际输出的时间差。';
   }
   const sourceNames = {visual:'画面', audio:'声音', danmaku:'弹幕'};
   function sourceTags(entry) {
@@ -192,6 +245,7 @@
       const timingDetails = [contextOnly ? '按原内容时间排列。声音为原音频时间，弹幕为接收时间；此卡为原文摘录。' : '按画面内容时间排列；声音与弹幕各自标注证据时间。'];
       if (entry.inference_seconds != null) timingDetails.push(`模型推理 ${Number(entry.inference_seconds).toFixed(2)} 秒`);
       if (entry.completion_lag != null) timingDetails.push(`从最后一帧接收到输出 ${Number(entry.completion_lag).toFixed(2)} 秒`);
+      if (finiteTime(entry.update_interval_seconds) !== null) timingDetails.push(`距上一条画面理解更新 ${Number(entry.update_interval_seconds).toFixed(2)} 秒`);
       if (finiteTime(entry.recorded_at) !== null) timingDetails.push(`处理完成于会话 ${formatTime(entry.recorded_at)}`);
       if (entry.generated_at) timingDetails.push(`生成于 ${formatTime(entry.generated_at)}`);
       meta.title = timingDetails.join('；');
@@ -513,7 +567,7 @@
       $('danmaku-candidates').replaceChildren(...(nodes.length ? nodes : [make('span','danmaku-candidate-empty','理解直播内容后，这里会更新 3 条候选。')]));
     }
     const updated = items.length && candidates.generated_at ? `${formatTime(candidates.generated_at)} 更新` : '';
-    $('danmaku-candidates-time').textContent = [candidates.status === 'generating' ? '正在更新' : candidates.status === 'error' ? '更新暂缓' : '',updated].filter(Boolean).join(' · ');
+    $('danmaku-candidates-time').textContent = [candidates.status === 'deferred' ? '优先跟上直播，候选稍后更新' : candidates.status === 'generating' ? '正在更新' : candidates.status === 'error' ? '更新暂缓' : '',updated].filter(Boolean).join(' · ');
     $('danmaku-candidates-time').title = plain(candidates.error);
   }
   async function sendDanmaku(event) {
@@ -612,11 +666,12 @@
     if (type === 'observation') {
       const entry = data.observation || data;
       const existing = entry.id && state.observations.find(value => value.id === entry.id);
+      if (!existing) sampleUnderstandingObservation(entry,envelope.time);
       if (existing) Object.assign(existing,entry); else state.observations.push(entry);
       const retention = Math.max(1,Math.floor(Number(state.memory?.retention?.max_observations) || 400));
-      state.observations = state.observations.slice(-retention); renderObservations();
+      state.observations = state.observations.slice(-retention); renderObservations(); renderUnderstandingTiming();
     } else if (type === 'memory') { state.memory = data.memory || data; renderMemory(); }
-    else if (type === 'observer') { state.observer = {...state.observer,...(data.observer || data)}; renderObserver(); renderModel(); }
+    else if (type === 'observer') { const observer = data.observer || data; state.observer = {...state.observer,...observer}; sampleUnderstandingState(observer); renderObserver(); renderModel(); }
     else if (type === 'danmaku') { const entry = data.danmaku || data; state.danmaku.push(entry); state.danmaku = state.danmaku.slice(-150); const now = performance.now(), text = plain(entry.text ?? entry.content ?? entry.message).trim(); recentDanmaku = recentDanmaku.filter(item => now - item.received <= 2000); if (text) recentDanmaku.push({text,received:now}); recentDanmaku = recentDanmaku.slice(-200); danmakuTotal++; renderDanmaku(); flyDanmaku(entry); return; }
     else if (type === 'playback') { state.playback = {...state.playback,...(data.playback || data)}; setupPlayer(); }
     else if (type === 'plan') { if (data.question_id) { questionPlans.set(data.question_id,data); answerMessage(data.question_id).status = 'answering'; renderMessages(); } }
@@ -726,4 +781,5 @@
   window.addEventListener('pagehide',() => { if (eventSource) eventSource.close(); if (hls) hls.destroy(); });
   switchTab('activity'); renderAll(); refreshState(); connectEvents();
   setInterval(() => { if (!document.hidden && !refreshTimer) refreshState(); },15000);
+  setInterval(() => { if (!document.hidden) renderUnderstandingTiming(); },1000);
 })();

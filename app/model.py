@@ -1,6 +1,7 @@
 """Small, asynchronous client for OpenAI-compatible vision endpoints."""
 from __future__ import annotations
 
+import asyncio
 import json
 from typing import Any
 
@@ -11,6 +12,10 @@ class ModelError(RuntimeError):
     """A model request failed without producing a usable answer."""
 
 
+class ModelBusy(ModelError):
+    """Optional background work yielded to observations or a user question."""
+
+
 class VisionModel:
     def __init__(self, base_url: str, model: str, api_key: str = "", timeout: float = 90):
         self.base_url = base_url.rstrip("/")
@@ -18,6 +23,17 @@ class VisionModel:
         self.api_key = api_key
         self.timeout = timeout
         self._client: httpx.AsyncClient | None = None
+        # Observations have their own admission path. A long question must not
+        # hold their slots; optional drafts share one slot with user questions.
+        self._interactive_slot = asyncio.Lock()
+        self._interactive_requests = 0
+        self._observation_requests = 0
+        self._background_active = False
+
+    @property
+    def background_available(self) -> bool:
+        return (not self._interactive_requests and not self._background_active
+                and self._observation_requests < 2)
 
     @property
     def configured(self) -> bool:
@@ -25,6 +41,45 @@ class VisionModel:
 
     async def complete(self, messages: list[dict[str, Any]], max_tokens: int = 768,
                        json_mode: bool = False) -> str:
+        self._interactive_requests += 1
+        try:
+            async with self._interactive_slot:
+                return await self._request(messages, max_tokens, json_mode)
+        finally:
+            self._interactive_requests -= 1
+
+    async def complete_observation(self, messages: list[dict[str, Any]], max_tokens: int = 768,
+                                   json_mode: bool = False) -> str:
+        self._observation_requests += 1
+        try:
+            # Retain the configured failure timeout, independently of the
+            # freshness target. Slow but useful results must not all disappear
+            # just because even the smallest input exceeds a fixed deadline.
+            return await asyncio.wait_for(self._request(messages, max_tokens, json_mode),
+                                          timeout=self.timeout)
+        except asyncio.TimeoutError as exc:
+            raise ModelError("观察请求长时间未完成，正在使用最新画面重新调度。") from exc
+        finally:
+            self._observation_requests -= 1
+
+    async def complete_background(self, messages: list[dict[str, Any]], max_tokens: int = 240,
+                                  json_mode: bool = False,
+                                  allow_observations_busy: bool = False) -> str:
+        if (self._interactive_requests or self._background_active or self._interactive_slot.locked()
+                or (self._observation_requests >= 2 and not allow_observations_busy)):
+            raise ModelBusy("优先更新观察与回答，候选弹幕稍后刷新。")
+        self._background_active = True
+        try:
+            async with self._interactive_slot:
+                return await asyncio.wait_for(self._request(messages, max_tokens, json_mode),
+                                              timeout=min(self.timeout, 6.0))
+        except asyncio.TimeoutError as exc:
+            raise ModelBusy("候选生成暂缓，保留现有草稿。") from exc
+        finally:
+            self._background_active = False
+
+    async def _request(self, messages: list[dict[str, Any]], max_tokens: int,
+                       json_mode: bool) -> str:
         if not self.configured:
             raise ModelError("尚未配置视觉模型服务地址和模型名称。")
         if self._client is None:

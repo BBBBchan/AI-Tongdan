@@ -22,11 +22,18 @@ class Settings:
     observation_stride: int = 3
     observation_concurrency: int = 2
     audio_enabled: bool = True
-    audio_alignment_wait_seconds: float = 4
+    audio_alignment_wait_seconds: float = 0.5
+    adaptive_observation: bool = True
+    observation_max_frames: int = 8
+    observation_target_lag: float = 15
 
     def __post_init__(self):
         if self.observation_frames not in (2, 4):
             raise ValueError("OBSERVATION_FRAMES must be 2 or 4")
+        if self.observation_max_frames not in (2, 4, 6, 8):
+            raise ValueError("OBSERVATION_MAX_FRAMES must be 2, 4, 6 or 8")
+        if not 5 <= self.observation_target_lag <= 60:
+            raise ValueError("OBSERVATION_TARGET_LAG must be between 5 and 60 seconds")
 
     @classmethod
     def from_env(cls):
@@ -44,7 +51,10 @@ class Settings:
             max(1, min(4, int(os.getenv("OBSERVATION_STRIDE", "3")))),
             max(1, min(2, int(os.getenv("OBSERVATION_CONCURRENCY", "2")))),
             os.getenv("AUDIO_ENABLED", "1").strip().lower() not in {"0", "false", "no"},
-            max(0, min(8, float(os.getenv("AUDIO_ALIGNMENT_WAIT_SECONDS", "4")))),
+            max(0, min(8, float(os.getenv("AUDIO_ALIGNMENT_WAIT_SECONDS", "0.5")))),
+            os.getenv("ADAPTIVE_OBSERVATION", "1").strip().lower() not in {"0", "false", "no"},
+            int(os.getenv("OBSERVATION_MAX_FRAMES", "8")),
+            float(os.getenv("OBSERVATION_TARGET_LAG", "15")),
         )
 
     @property

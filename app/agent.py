@@ -17,10 +17,11 @@ import shutil
 import time
 import uuid
 from collections import deque
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Awaitable, Callable
 
+from app.adaptive import AdaptiveObservation
 from vendor.deltastreamer.memory import Event, MemoryStore
 from vendor.deltastreamer.memory_graph import EntityIndex, MemoryGraph
 
@@ -89,12 +90,14 @@ class Frame:
     timestamp: float
     sequence: int = 0
     received_monotonic: float = 0.0
+    received_at: float = 0.0
 
 
 @dataclass(frozen=True)
 class ObservationWindow:
     frames: tuple[Frame, ...]
     created_monotonic: float
+    token: str = field(default_factory=lambda: uuid.uuid4().hex)
 
     @property
     def sequence(self) -> int:
@@ -102,7 +105,9 @@ class ObservationWindow:
 
     @property
     def lease_id(self) -> str:
-        return f"observation:{self.sequence}"
+        # A queued window and a refreshed active window can share an end frame.
+        # Their leases must remain independent until both owners finish.
+        return f"observation:{self.sequence}:{self.token}"
 
 
 def _json_object(text: str) -> dict[str, Any]:
@@ -187,7 +192,9 @@ class LiveAgent:
                  observation_max_tokens: int = 768, observation_frames: int = 4,
                  observation_stride: int = 3, observation_concurrency: int = 2,
                  session_clock_start: float | None = None,
-                 audio_alignment_wait_seconds: float = 0.0):
+                 audio_alignment_wait_seconds: float = 0.0,
+                 adaptive_observation: bool = False, observation_max_frames: int = 8,
+                 observation_target_lag: float = 15.0):
         self.session_id = session_id
         self.data_dir = Path(data_dir)
         self.frame_dir = self.data_dir / "frames"
@@ -198,7 +205,12 @@ class LiveAgent:
         self.observation_frames = int(observation_frames)
         self.observation_stride = max(1, int(observation_stride))
         self.observation_concurrency = max(1, min(2, int(observation_concurrency)))
-        self.max_frames = max(self.observation_frames, int(max_frames))
+        self.adaptive_observation = bool(adaptive_observation)
+        self.observation_target_lag = max(3.0, float(observation_target_lag))
+        self._adaptive = (AdaptiveObservation(self.observation_frames, int(observation_max_frames),
+            self.observation_target_lag, self.observation_concurrency) if self.adaptive_observation else None)
+        rolling_capacity = max(self._adaptive.levels) if self._adaptive else self.observation_frames
+        self.max_frames = max(rolling_capacity, int(max_frames))
         self.max_observations = max(1, int(max_observations))
         self.observation_max_tokens = max(256, min(2048, int(observation_max_tokens)))
         self.memory = LiveMemory(sample_id=session_id)
@@ -228,7 +240,7 @@ class LiveAgent:
         self._retired: dict[str, Frame] = {}
         self._leases: dict[str, set[str]] = {}
         self._previous: Frame | None = None
-        self._rolling: deque[Frame] = deque(maxlen=self.observation_frames)
+        self._rolling: deque[Frame] = deque(maxlen=rolling_capacity)
         self._pending: asyncio.Queue[ObservationWindow] = asyncio.Queue(maxsize=1)
         self._queued_window: ObservationWindow | None = None
         self._inflight: dict[int, ObservationWindow] = {}
@@ -245,10 +257,15 @@ class LiveAgent:
         self._cancelled_windows = 0
         self._submitted_windows = 0
         self._last_scheduled_sequence = 0
+        self._last_scheduled_monotonic: float | None = None
+        self._last_submitted_sequence = 0
         self._last_committed_sequence = 0
         self._latest_offered_timestamp: float | None = None
         self._last_inference_seconds: float | None = None
         self._last_completion_lag: float | None = None
+        self._last_completion_monotonic: float | None = None
+        self._last_update_interval: float | None = None
+        self._last_peak_age: float | None = None
         self._questions: dict[str, asyncio.Task] = {}
         self._question_contexts: dict[str, dict[str, Any]] = {}
         self._question_lock = asyncio.Semaphore(1)
@@ -288,15 +305,18 @@ class LiveAgent:
         self._context_clock_floor = max(timestamp, self._context_time())
         self._context_clock_origin = received_monotonic
         self._latest_offered_timestamp = timestamp
-        frame = Frame(frame_id, destination, timestamp, self._received_frames, received_monotonic)
+        frame = Frame(frame_id, destination, timestamp, self._received_frames, received_monotonic, time.time())
         self.frames.append(frame)
         self._rolling.append(frame)
         self._frame_usage[frame.id] = {"submitted": False, "observed": False}
-        if len(self._rolling) == self.observation_frames and (
-                not self._last_scheduled_sequence
-                or frame.sequence - self._last_scheduled_sequence >= self.observation_stride):
-            window = ObservationWindow(tuple(self._rolling), time.monotonic())
+        count = self._adaptive.frame_count if self._adaptive else self.observation_frames
+        due = (self._last_scheduled_monotonic is None or received_monotonic - self._last_scheduled_monotonic
+               >= self._adaptive.submit_interval) if self._adaptive else (
+               not self._last_scheduled_sequence or frame.sequence - self._last_scheduled_sequence >= self.observation_stride)
+        if len(self._rolling) >= count and due:
+            window = ObservationWindow(tuple(self._rolling)[-count:], received_monotonic)
             self._last_scheduled_sequence = frame.sequence
+            self._last_scheduled_monotonic = received_monotonic
             if self._pending.full():
                 replaced = self._pending.get_nowait()
                 self._pending.task_done()
@@ -444,7 +464,13 @@ class LiveAgent:
 
     async def _wait_for_audio(self, window: ObservationWindow) -> dict[str, Any]:
         started = time.monotonic()
-        deadline = started + self.audio_alignment_wait_seconds
+        wait_budget = self.audio_alignment_wait_seconds
+        if self._adaptive:
+            # Keep late ASR on its independent source-timestamped context path.
+            # Old .env values must not add four seconds to each visual request.
+            remaining = self.observation_target_lag - (started - window.frames[-1].received_monotonic)
+            wait_budget = min(wait_budget, .5, max(0.0, remaining - self._adaptive.predicted_seconds() - 1))
+        deadline = started + wait_budget
         while True:
             # No await between clear and coverage check: a completion cannot
             # be lost, and both observer workers may wait on the same event.
@@ -459,7 +485,7 @@ class LiveAgent:
                 alignment = self._audio_alignment(window)
                 break
         alignment["wait_seconds"] = round(max(0.0, time.monotonic() - started), 4)
-        alignment["timed_out"] = (self.audio_alignment_wait_seconds > 0
+        alignment["timed_out"] = (wait_budget > 0
                                    and alignment["status"] != "complete"
                                    and time.monotonic() >= deadline)
         return alignment
@@ -650,6 +676,26 @@ class LiveAgent:
                               "memory": self._memory_snapshot(), "messages": list(self.messages),
                               "audio": self._audio_snapshot()})
 
+    def _freshness_snapshot(self) -> dict[str, Any]:
+        # Media PTS may run ahead/behind wall time. Only this process's receipt
+        # clock can measure the age of its latest *published* visual evidence.
+        source = self._previous
+        age = (max(0.0, time.monotonic() - source.received_monotonic)
+               if source is not None and source.received_monotonic > 0 else None)
+        status = ("fresh" if age <= self.observation_target_lag else "overdue") if age is not None else (
+            "unknown" if self._restored_timestamp is not None else "waiting")
+        return {"understanding_age_seconds": round(age, 4) if age is not None else None,
+                "source_received_at": source.received_at if source is not None and source.received_at > 0 else None,
+                "freshness_status": status, "target_lag_seconds": self.observation_target_lag,
+                "freshness_basis": "latest_published_visual_source_receipt_excludes_cdn_delay",
+                "observed_update_interval_seconds": self._last_update_interval,
+                "peak_age_seconds": self._last_peak_age,
+                "adaptive_observation": self.adaptive_observation,
+                "adaptive_frame_count": self._adaptive.frame_count if self._adaptive else self.observation_frames,
+                "adaptive_submit_interval_seconds": self._adaptive.submit_interval if self._adaptive else None,
+                "adaptive_reason": self._adaptive.reason if self._adaptive else "fixed",
+                "predicted_inference_seconds": round(self._adaptive.predicted_seconds(), 3) if self._adaptive else None}
+
     def _observer_snapshot(self) -> dict[str, Any]:
         if not self._running:
             status = "stopped"
@@ -689,7 +735,7 @@ class LiveAgent:
                 "context_batches": self._context_batches,
                 "pending_context_audio": len(self._context_audio),
                 "pending_context_danmaku": len(self._context_chat),
-                "active_questions": len(self._questions)}
+                "active_questions": len(self._questions), **self._freshness_snapshot()}
 
     def _memory_snapshot(self) -> dict[str, Any]:
         observations = {item["id"]: item for item in self.observations}
@@ -966,6 +1012,10 @@ class LiveAgent:
         )
         event.t = frame.timestamp
         completion_lag = max(0.0, completed_monotonic - frame.received_monotonic)
+        update_interval = (max(0.0, completed_monotonic - self._last_completion_monotonic)
+                           if self._last_completion_monotonic is not None else None)
+        peak_age = (max(0.0, completed_monotonic - self._previous.received_monotonic)
+                    if self._previous is not None and self._previous.received_monotonic > 0 else None)
         observation = {"id": event.eid, "timestamp": frame.timestamp, "t": frame.timestamp,
                        "kind": "observation", "method": "model",
                        "source_start": window.frames[0].timestamp, "source_end": frame.timestamp,
@@ -987,6 +1037,11 @@ class LiveAgent:
                        "inference_seconds": round(inference_seconds, 4),
                        "queue_seconds": round(queue_seconds, 4),
                        "completion_lag": round(completion_lag, 4),
+                       "source_received_at": frame.received_at or None,
+                       "update_interval_seconds": round(update_interval, 4) if update_interval is not None else None,
+                       "peak_age_seconds": round(peak_age, 4) if peak_age is not None else None,
+                       "target_lag_seconds": self.observation_target_lag,
+                       "freshness_status": "fresh" if completion_lag <= self.observation_target_lag else "overdue",
                        "completion_lag_basis": "since_last_frame_received_excludes_cdn_delay", **fields}
         self.observations.append(observation)
         key_fact = str(record.get("key_fact") or "").strip()[:240]
@@ -1002,6 +1057,11 @@ class LiveAgent:
         self._last_error = None
         self._last_inference_seconds = observation["inference_seconds"]
         self._last_completion_lag = observation["completion_lag"]
+        self._last_completion_monotonic = completed_monotonic
+        self._last_update_interval = observation["update_interval_seconds"]
+        self._last_peak_age = observation["peak_age_seconds"]
+        if self._adaptive:
+            self._adaptive.record(len(window.frames), inference_seconds, completion_lag, update_interval, peak_age)
         for member in window.frames:
             flags = self._frame_usage[member.id]
             if not flags["observed"]:
@@ -1010,28 +1070,72 @@ class LiveAgent:
         self._persist()
         return observation
 
+    def _refresh_observation_window(self, window: ObservationWindow) -> ObservationWindow:
+        """Replace unsubmitted evidence only; never touch an active model call.
+
+        Independent leases also protect a pending window ending at the same
+        frame. All bookkeeping happens without an await, so other workers and
+        the frame producer see a consistent ownership transition.
+        """
+        if not self._adaptive or len(self._rolling) < 2:
+            return window
+        members = tuple(self._rolling)[-self._adaptive.frame_count:]
+        end = members[-1].sequence
+        if end < window.sequence or (end in self._inflight and end != window.sequence):
+            return window
+        if tuple(f.id for f in members) == tuple(f.id for f in window.frames):
+            return window
+        refreshed = ObservationWindow(members, window.created_monotonic)
+        self._leases[refreshed.lease_id] = {f.id for f in members}
+        self._inflight.pop(window.sequence, None)
+        self._inflight[refreshed.sequence] = refreshed
+        self._leases.pop(window.lease_id, None)
+        return refreshed
+
     async def _observe_loop(self, worker: int) -> None:
         while self._running:
             window = await self._pending.get()
             if self._queued_window is window:
                 self._queued_window = None
+            if self._adaptive and (window.sequence in self._inflight
+                                   or window.sequence <= self._last_submitted_sequence):
+                # A worker may have refreshed onto the queued window's newest
+                # frame while it waited for ASR. Do not submit that end twice.
+                self._leases.pop(window.lease_id, None)
+                self._pending.task_done()
+                self._settle_frame_usage()
+                self._prune_frames()
+                continue
             self._inflight[window.sequence] = window
             try:
                 if not self.model.configured:
                     continue
                 await self._send("observer", self._observer_snapshot())
+                window = self._refresh_observation_window(window)
+                if self._adaptive and window.sequence <= self._last_submitted_sequence:
+                    continue
                 alignment = await self._wait_for_audio(window)
+                refreshed = self._refresh_observation_window(window)
+                if refreshed is not window:
+                    updated_alignment = self._audio_alignment(refreshed)
+                    updated_alignment.update(wait_seconds=alignment["wait_seconds"],
+                        timed_out=alignment["timed_out"] and updated_alignment["status"] != "complete")
+                    alignment, window = updated_alignment, refreshed
+                if self._adaptive and window.sequence <= self._last_submitted_sequence:
+                    continue
                 context = self._observation_context(window)
                 context["audio_alignment"] = alignment
                 messages = self._observation_messages(window, context)
                 started = time.monotonic()
+                self._last_submitted_sequence = max(self._last_submitted_sequence, window.sequence)
                 self._submitted_windows += 1
                 for frame in window.frames:
                     flags = self._frame_usage[frame.id]
                     if not flags["submitted"]:
                         flags["submitted"] = True
                         self._submitted_frames += 1
-                raw = await self.model.complete(messages, max_tokens=min(1000, self.observation_max_tokens), json_mode=True)
+                complete = getattr(self.model, "complete_observation", None) or self.model.complete
+                raw = await complete(messages, max_tokens=min(1000, self.observation_max_tokens), json_mode=True)
                 completed = time.monotonic()
                 record = _json_object(raw)
                 observation = self._commit_observation(window, record, completed - started,
@@ -1049,6 +1153,8 @@ class LiveAgent:
                 raise
             except Exception as exc:
                 self._failed_windows += 1
+                if self._adaptive:
+                    self._adaptive.failed()
                 error = str(exc)[:300]
                 if window.sequence > self._last_committed_sequence:
                     self._last_error = error

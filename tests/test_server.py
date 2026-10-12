@@ -183,22 +183,25 @@ async def test_auto_danmaku_routes_are_opt_in_bounded_and_session_scoped(
             assert wrong.status_code == 409
             for invalid in ({"interval_seconds": 4}, {"interval_seconds": 3601},
                             {"interval_seconds": 60.5}, {"interval_seconds": True},
-                            {"duration_seconds": 1801},
                             *({"max_messages": value} for value in (0, -1, True, False, "3", 3.0, 3.5, 1001))):
                 response = await client.post("/api/danmaku/auto/start", json={"session_id": sid, **invalid})
                 assert response.status_code == 422
             assert workspace.danmaku_auto.task is None and not entered.is_set()
             count_settings = {} if max_messages is None else {"max_messages": max_messages}
+            # Cached clients may still send the retired duration field.
+            legacy_settings = {"duration_seconds": 1800} if max_messages is None else {}
             expected_count = 6 if max_messages is None else max_messages
             started = await client.post("/api/danmaku/auto/start", json={
-                "session_id": sid, "interval_seconds": 60, "duration_seconds": 1800, **count_settings})
+                "session_id": sid, "interval_seconds": 60, **count_settings, **legacy_settings})
             assert started.status_code == 200
             payload = started.json()
             assert payload["status"] == "active" and payload["session_id"] == sid
             assert payload["room_id"] == workspace.room.room_id
             assert payload["sent_count"] == 0 and payload["max_messages"] == expected_count
             assert payload["interval_seconds"] == 60 and payload["jitter_ratio"] == .3
-            assert payload["ends_at"] - payload["started_at"] == 1800
+            assert payload["ends_at"] is None
+            schema = app.openapi()["components"]["schemas"]["AutoDanmakuRequest"]["properties"]
+            assert "duration_seconds" not in schema
             await asyncio.wait_for(entered.wait(), 1)
             runner = workspace.danmaku_auto.task
             assert not runner.done()

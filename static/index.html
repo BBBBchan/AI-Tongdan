@@ -8,9 +8,9 @@
   <title>AI同担—你的AI直播同担</title>
   <link rel="icon" type="image/png" href="/static/brand/ai-tongdan-logo.png">
   <link rel="apple-touch-icon" href="/static/brand/ai-tongdan-logo.png">
-  <link rel="stylesheet" href="/static/app.css?v=danmaku-count-1">
+  <link rel="stylesheet" href="/static/app.css?v=danmaku-no-deadline-1">
   <script defer src="/static/vendor/hls.min.js"></script>
-  <script defer src="/static/app.js?v=danmaku-count-1"></script>
+  <script defer src="/static/app.js?v=danmaku-no-deadline-1"></script>
 </head>
 <body>
   <header class="topbar">
@@ -66,7 +66,7 @@
               <div class="danmaku-auto-settings"><label for="danmaku-auto-count">发送数量 <input id="danmaku-auto-count" type="number" value="6" min="1" max="1000" step="1" inputmode="numeric" aria-describedby="danmaku-auto-count-help"> 条</label><span id="danmaku-auto-count-help">填写 1–1000 的整数，默认 6 条</span></div>
               <p id="danmaku-auto-detail">首条新候选就绪后发送，此后按随机间隔接话。</p>
               <p id="danmaku-auto-last" class="danmaku-auto-last" hidden></p>
-              <div class="danmaku-auto-actions"><button id="danmaku-auto-start" class="quiet-button" type="button" disabled>一键融入</button><button id="danmaku-auto-stop" class="quiet-button" type="button" hidden>停止融入</button><span id="danmaku-auto-limit-note">达到 6 条或 30 分钟即结束。切房或下播时停止，重启后需重新启动。</span></div>
+              <div class="danmaku-auto-actions"><button id="danmaku-auto-start" class="quiet-button" type="button" disabled>一键融入</button><button id="danmaku-auto-stop" class="quiet-button" type="button" hidden>停止融入</button><span id="danmaku-auto-limit-note">发满 6 条后结束，不设运行时限。切房或下播时停止，重启后需重新启动。</span></div>
               <p id="danmaku-auto-feedback" class="danmaku-send-feedback" role="status" hidden></p>
             </div>
             <p id="danmaku-send-feedback" class="danmaku-send-feedback" role="status" hidden></p>

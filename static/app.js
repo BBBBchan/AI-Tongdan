@@ -708,18 +708,18 @@
     input.setAttribute('aria-invalid',String(interval === null));
     countInput.setAttribute('aria-invalid',String(count === null));
     $('danmaku-auto-count-help').textContent = count === null ? '请输入 1–1000 之间的整数条数' : '填写 1–1000 的整数，默认 6 条';
-    $('danmaku-auto-limit-note').textContent = `${count === null ? '达到所填条数' : `达到 ${count} 条`}或 30 分钟即结束。切房或下播时停止，重启后需重新启动。`;
+    $('danmaku-auto-limit-note').textContent = `${count === null ? '发满所填条数' : `发满 ${count} 条`}后结束，不设运行时限。切房或下播时停止，重启后需重新启动。`;
     $('danmaku-auto-range').textContent = interval === null ? '请输入 5–3600 之间的整数秒数' : `随机 ±${danmakuSeconds(jitter * 100)}% · 每次 ${danmakuSeconds(interval * (1 - jitter))}–${danmakuSeconds(interval * (1 + jitter))} 秒`;
     panel.dataset.status = status;
     $('danmaku-auto-status').textContent = ({active:`运行中 · 已发送 ${sent}/${limit} 条`,stopped:`已停止 · 已发送 ${sent}/${limit} 条`,completed:`已结束 · 已发送 ${sent}/${limit} 条`,error:`发送已停止 · 已发送 ${sent}/${limit} 条`,idle:'未启动'})[status] || '未启动';
     const nextInterval = finiteTime(auto.next_interval_seconds);
-    const detail = active ? [interval === null ? '' : `基准间隔 ${danmakuSeconds(interval)} 秒`,nextInterval !== null && nextInterval >= 0 ? `本次间隔 ${danmakuSeconds(nextInterval)} 秒` : '',auto.next_send_at ? `下次计划 ${formatTime(auto.next_send_at)}` : '等待新候选',auto.ends_at ? `最迟 ${formatTime(auto.ends_at)} 结束` : '',Number(auto.skipped_count) ? `已跳过 ${Number(auto.skipped_count)} 次` : '',plain(auto.reason)] : [plain(auto.error || auto.reason) || '首条新候选就绪后发送，此后按随机间隔接话。',Number(auto.skipped_count) ? `已跳过 ${Number(auto.skipped_count)} 次` : ''];
+    const detail = active ? [interval === null ? '' : `基准间隔 ${danmakuSeconds(interval)} 秒`,nextInterval !== null && nextInterval >= 0 ? `本次间隔 ${danmakuSeconds(nextInterval)} 秒` : '',auto.next_send_at ? `下次计划 ${formatTime(auto.next_send_at)}` : '等待新候选',Number(auto.skipped_count) ? `已跳过 ${Number(auto.skipped_count)} 次` : '',plain(auto.reason)] : [plain(auto.error || auto.reason) || '首条新候选就绪后发送，此后按随机间隔接话。',Number(auto.skipped_count) ? `已跳过 ${Number(auto.skipped_count)} 次` : ''];
     $('danmaku-auto-detail').textContent = detail.filter(Boolean).join(' · ');
     $('danmaku-auto-last').textContent = auto.last_text ? `最近发送${auto.last_sent_at ? ` ${formatTime(auto.last_sent_at)}` : ''}：${plain(auto.last_text)}` : '';
     $('danmaku-auto-last').hidden = !auto.last_text;
     $('danmaku-auto-start').hidden = active;
     $('danmaku-auto-start').disabled = danmakuAutoBusy || interval === null || count === null || state.session.status !== 'live' || !state.danmaku_send.can_send;
-    $('danmaku-auto-start').title = interval === null ? '请填写有效的基准间隔' : count === null ? '请填写有效的发送数量' : state.session.status !== 'live' ? '直播中才可启动一键融入' : !state.danmaku_send.can_send ? '请先配置本人登录' : `使用当前间隔向直播间发送，最多 ${count} 条或 30 分钟`;
+    $('danmaku-auto-start').title = interval === null ? '请填写有效的基准间隔' : count === null ? '请填写有效的发送数量' : state.session.status !== 'live' ? '直播中才可启动一键融入' : !state.danmaku_send.can_send ? '请先配置本人登录' : `使用当前间隔向直播间发送，发满 ${count} 条后结束，不设运行时限`;
     $('danmaku-auto-start').textContent = danmakuAutoBusy === 'start' ? '正在融入…' : '一键融入';
     $('danmaku-auto-stop').hidden = !active;
     $('danmaku-auto-stop').disabled = danmakuAutoBusy;
@@ -734,7 +734,7 @@
     if (start && count === null) { feedback.textContent = '请填写 1–1000 之间的整数条数。'; feedback.classList.add('error'); feedback.hidden = false; renderDanmakuAuto(); return; }
     danmakuAutoBusy = start ? 'start' : 'stop'; feedback.hidden = true; renderDanmakuAuto();
     try {
-      const body = start ? {session_id:sid,interval_seconds:interval,duration_seconds:1800,max_messages:count} : {session_id:sid};
+      const body = start ? {session_id:sid,interval_seconds:interval,max_messages:count} : {session_id:sid};
       const result = await api(`/api/danmaku/auto/${start ? 'start' : 'stop'}`,{method:'POST',body:JSON.stringify(body)});
       if (state.session.id !== sid) return;
       const auto = result.danmaku_auto || result;

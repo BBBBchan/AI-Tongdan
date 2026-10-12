@@ -113,16 +113,14 @@ async def tick(auto):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("change,expected", [
-    ("stop", "stopped"), ("deadline", "completed"), ("stale", "active"), ("style", "active"),
+    ("stop", "stopped"), ("stale", "active"), ("style", "active"),
     ("pending-style", "active"),
 ])
 async def test_rechecks_trial_at_post_boundary_after_authentication(trial, change, expected):
     auto, ws, clock = trial
     await auto.start(ws.session["id"])
+    clock.advance(1799)
     ws.seed()
-    if change == "deadline":
-        clock.advance(1799)
-        ws.seed()
 
     async def authentication_then_guard(sid, text, *, before_post, source):
         assert source == "auto"
@@ -136,7 +134,7 @@ async def test_rechecks_trial_at_post_boundary_after_authentication(trial, chang
             ws.pending_danmaku_style_updates += 1
         clock.advance(31 if change == "stale" else 2)
         before_post()
-        pytest.fail("Stopped, expired or stale trial must not POST")
+        pytest.fail("Stopped or stale run must not POST")
 
     ws._send_danmaku_locked = authentication_then_guard
     await tick(auto)
@@ -184,8 +182,6 @@ async def test_starts_disabled_and_never_restores_an_active_trial(tmp_path):
     {"interval_seconds": value} for value in (4, 0, True, "60", float("nan"), 3601, 60.5)
 ] + [
     {"max_messages": value} for value in (0, -1, True, False, "3", 3.0, 3.5, float("nan"), 1001)
-] + [
-    {"duration_seconds": 1801},
 ])
 async def test_only_authorized_trial_limits_are_accepted(trial, kwargs):
     auto, ws, _ = trial
@@ -211,7 +207,7 @@ async def test_custom_integer_message_limits_can_start(trial, max_messages):
     auto, ws, _ = trial
     state = await auto.start(ws.session["id"], max_messages=max_messages)
     assert state["status"] == "active" and state["max_messages"] == max_messages
-    assert state["ends_at"] - state["started_at"] == 1800
+    assert state["ends_at"] is None
     assert state["sent_count"] == 0 and state["jitter_ratio"] == .3
     assert auto.task is not None and ws.attempts == []
 
@@ -235,17 +231,18 @@ async def test_start_requires_current_live_session_and_login(trial, invalid):
 
 
 @pytest.mark.asyncio
-async def test_repeated_start_preserves_quota_deadline_and_single_task(trial):
+async def test_repeated_start_preserves_quota_schedule_and_single_task(trial):
     auto, ws, clock = trial
     await auto.start(ws.session["id"], max_messages=3)
     ws.seed()
     await tick(auto)
-    task, deadline, next_due = auto.task, auto.deadline, auto.next_due
+    task, started_at, next_due = auto.task, auto.data["started_at"], auto.next_due
     clock.advance(15)
     again = await auto.start(ws.session["id"], interval_seconds=5, max_messages=1000)
     assert again["sent_count"] == 1 and len(again["history"]) == 1
     assert again["max_messages"] == 3 and again["interval_seconds"] == 300
-    assert auto.task is task and auto.deadline == deadline and auto.next_due == next_due
+    assert auto.task is task and again["started_at"] == started_at and auto.next_due == next_due
+    assert again["ends_at"] is None
     assert auto.sent_texts == {"杯子抢镜了"}
 
 
@@ -460,28 +457,78 @@ async def test_stops_exactly_at_configured_message_count(trial, max_messages):
 
 
 @pytest.mark.asyncio
-async def test_expired_trial_stops_without_sending_even_with_fresh_candidate(trial):
+@pytest.mark.parametrize("elapsed", [1800, 3600, 86400])
+async def test_fresh_candidate_still_sends_after_long_elapsed_time(trial, elapsed):
     auto, ws, clock = trial
     await auto.start(ws.session["id"])
-    clock.advance(1800)
+    clock.advance(elapsed)
     ws.seed()
     await tick(auto)
-    assert auto.data["status"] == "completed" and ws.attempts == []
-    assert auto.data["reason"] == "本轮 30 分钟已结束，已发送 0/6 条"
+    assert auto.data["status"] == "active" and len(ws.attempts) == 1
+    assert auto.data["sent_count"] == 1 and auto.data["ends_at"] is None
 
 
 @pytest.mark.asyncio
-async def test_time_limit_still_stops_a_large_quota_and_reports_actual_count(trial):
+async def test_long_running_trial_stops_only_at_configured_count(trial):
     auto, ws, clock = trial
-    await auto.start(ws.session["id"], max_messages=1000)
+    await auto.start(ws.session["id"], interval_seconds=3600, max_messages=3)
+    for index in range(3):
+        if index:
+            clock.advance(3600)
+        ws.seed(f"第{index + 1}条新候选")
+        await tick(auto)
+        assert auto.data["sent_count"] == index + 1
+        assert auto.data["status"] == ("completed" if index == 2 else "active")
+    assert auto.data["reason"] == "已发送 3 条，达到本轮数量上限"
+    assert auto.data["next_send_at"] is None
+    clock.advance(3600)
+    ws.seed("达到数量后不应再发送")
+    await tick(auto)
+    assert len(ws.attempts) == 3
+
+
+@pytest.mark.asyncio
+async def test_long_running_trial_keeps_waiting_for_fresh_evidence(trial):
+    auto, ws, clock = trial
+    await auto.start(ws.session["id"])
     ws.seed()
+    clock.advance(86400)
     await tick(auto)
-    clock.advance(1800)
-    ws.seed("时间已到不应发送")
+    assert auto.data["status"] == "active" and ws.attempts == []
+    assert auto.data["skipped_count"] == 1
+    clock.advance(300)
+    ws.seed("新的候选已经来了")
     await tick(auto)
-    assert len(ws.attempts) == 1 and auto.data["sent_count"] == 1
-    assert auto.data["status"] == "completed"
-    assert auto.data["reason"] == "本轮 30 分钟已结束，已发送 1/1000 条"
+    assert auto.data["sent_count"] == 1 and len(ws.attempts) == 1
+
+
+@pytest.mark.asyncio
+async def test_attempt_history_stays_bounded_without_consuming_success_quota(trial):
+    auto, ws, clock = trial
+    await auto.start(ws.session["id"], max_messages=3)
+    auto.data["history"] = [
+        {"attempted_at": clock.time(), "text": f"旧候选{index}", "status": "not_sent"}
+        for index in range(1000)
+    ]
+    clock.advance(86400)
+    ws.seed("认证时会过期")
+    ws.send_delay = 31
+    await tick(auto)
+    assert len(auto.data["history"]) == 1000
+    assert auto.data["history"][0]["text"] == "旧候选1"
+    assert auto.data["history"][-1]["code"] == "trial_stale"
+    assert auto.data["sent_count"] == 0
+    clock.advance(300)
+    ws.seed("新的候选成功发送")
+    ws.send_delay = 0
+    await tick(auto)
+    assert len(auto.data["history"]) == 1000
+    assert auto.data["history"][0]["text"] == "旧候选2"
+    assert auto.data["history"][-1]["status"] == "accepted"
+    assert auto.data["status"] == "active" and auto.data["sent_count"] == 1
+    saved = json.loads((ws.settings.data_dir / "sessions" / ws.session["id"] /
+                        "danmaku_auto.private.json").read_text())
+    assert saved["history"] == auto.snapshot()["history"]
 
 
 @pytest.mark.asyncio
@@ -534,14 +581,20 @@ async def test_candidate_expiring_during_room_lookup_is_not_sent(trial):
 
 
 @pytest.mark.asyncio
-async def test_deadline_reached_during_room_lookup_is_not_sent(trial):
+@pytest.mark.parametrize("stage", ["room_lookup", "authentication"])
+async def test_crossing_thirty_minutes_during_lookup_or_auth_does_not_block_fresh_send(trial, stage):
     auto, ws, clock = trial
     await auto.start(ws.session["id"])
     clock.advance(1795)
     ws.seed()
-    ws.resolve_delay = 6
+    if stage == "room_lookup":
+        ws.resolve_delay = 6
+    else:
+        ws.send_delay = 6
     await tick(auto)
-    assert auto.data["status"] == "completed" and ws.attempts == []
+    assert auto.data["status"] == "active" and len(ws.attempts) == 1
+    assert auto.data["sent_count"] == 1
+    assert auto.data["history"][-1]["status"] == "accepted"
 
 
 @pytest.mark.asyncio

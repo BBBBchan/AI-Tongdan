@@ -1,4 +1,4 @@
-"""Explicitly enabled, session-bound, finite danmaku trials.
+"""Explicitly enabled, session-bound, count-limited danmaku runs.
 
 The process never restores an active trial from disk. A send with an uncertain
 outcome stops the trial, rather than replaying a possibly delivered message.
@@ -19,7 +19,7 @@ class AutoDanmaku:
         self.workspace = workspace
         self.task = None
         self.stop_requested = False
-        self.deadline = self.next_due = 0.0
+        self.next_due = 0.0
         self.sent_texts = set()
         self.data = {"status": "idle", "session_id": None, "room_id": None,
                      "sent_count": 0, "skipped_count": 0, "history": [],
@@ -48,7 +48,7 @@ class AutoDanmaku:
         self._persist()
         await self.workspace.emit("danmaku_auto", self.snapshot())
 
-    async def start(self, session_id, interval_seconds=300, duration_seconds=1800, max_messages=6):
+    async def start(self, session_id, interval_seconds=300, max_messages=6):
         ws = self.workspace
         if not ws.session or ws.session["id"] != session_id:
             raise DanmakuSendError("直播会话已变更，请在当前房间重新启动。", 409)
@@ -58,18 +58,15 @@ class AutoDanmaku:
             raise DanmakuSendError("请先配置本人弹幕登录。", 401)
         if type(interval_seconds) is not int or not 5 <= interval_seconds <= 3600:
             raise DanmakuSendError("发送间隔请输入 5–3600 秒的整数。")
-        if duration_seconds != 1800:
-            raise DanmakuSendError("一键融入每轮最多 30 分钟。")
         if type(max_messages) is not int or not 1 <= max_messages <= 1000:
             raise DanmakuSendError("发送数量请输入 1–1000 条的整数。")
         if self.data["status"] == "active":
             return self.snapshot()  # Repeated clicks cannot reset the quota.
         now = time.time()
-        self.deadline = time.monotonic() + duration_seconds
         self.next_due = time.monotonic()  # First eligible message, then a randomized interval.
         self.sent_texts = set()
         self.data = {"status": "active", "session_id": session_id, "room_id": ws.room.room_id,
-                     "started_at": now, "ends_at": now + duration_seconds, "next_send_at": now,
+                     "started_at": now, "ends_at": None, "next_send_at": now,
                      "interval_seconds": interval_seconds, "jitter_ratio": 0.3,
                      "next_interval_seconds": None, "max_messages": max_messages,
                      "sent_count": 0, "skipped_count": 0, "last_text": None,
@@ -156,9 +153,6 @@ class AutoDanmaku:
         if self.data["sent_count"] >= self.data["max_messages"]:
             await self.finish("completed", f"已发送 {self.data['sent_count']} 条，达到本轮数量上限")
             return
-        if now >= self.deadline:
-            await self.finish("completed", f"本轮 30 分钟已结束，已发送 {self.data['sent_count']}/{self.data['max_messages']} 条")
-            return
         if now < self.next_due:
             return
         # Give the first fresh candidate a brief warm-up without sending old
@@ -187,9 +181,6 @@ class AutoDanmaku:
         if self.stop_requested:
             await self.finish("stopped", "已手动停止")
             return
-        if time.monotonic() >= self.deadline:
-            await self.finish("completed", f"本轮 30 分钟已结束，已发送 {self.data['sent_count']}/{self.data['max_messages']} 条")
-            return
         text = self.choose()  # The room lookup may have outlived the evidence.
         if not text:
             self._schedule_next()
@@ -199,6 +190,9 @@ class AutoDanmaku:
             return
         entry = {"attempted_at": time.time(), "text": text, "status": "pending"}
         self.data["history"].append(entry)
+        # A count-limited run may wait indefinitely for fresh candidates. Bound
+        # attempts separately from successful sends, which have their own quota.
+        del self.data["history"][:-1000]
         await self.publish()  # Record intent before POST; disk failure prevents send.
         generated = ws.danmaku_candidates["generated_at"]
         style_revision = ws.danmaku_style["revision"]
@@ -211,10 +205,6 @@ class AutoDanmaku:
                     or not ws.room or ws.room.room_id != self.data["room_id"]
                     or ws.room.live_status != 1 or ws.session["status"] != "live"):
                 raise DanmakuSendError("本轮已停止或直播连接已变更，未发送。", 409, "trial_stopped")
-            if time.monotonic() >= self.deadline:
-                raise DanmakuSendError(
-                    f"本轮 30 分钟已结束，已发送 {self.data['sent_count']}/{self.data['max_messages']} 条；本条未发送。",
-                    409, "trial_expired")
             if (style_revision != ws.danmaku_style["revision"]
                     or not 0 <= time.time() - generated <= 30 or self.choose() is None):
                 raise DanmakuSendError("候选依据已过期，未发送。", 409, "trial_stale")
@@ -222,7 +212,7 @@ class AutoDanmaku:
         try:
             await ws._send_danmaku_locked(self.data["session_id"], text, before_post=before_post, source="auto")
         except DanmakuSendError as exc:
-            if exc.code in {"trial_stopped", "trial_expired", "trial_stale"}:
+            if exc.code in {"trial_stopped", "trial_stale"}:
                 entry.update(status="not_sent", code=exc.code)
                 if exc.code == "trial_stale":
                     self._schedule_next()
@@ -230,7 +220,7 @@ class AutoDanmaku:
                     self.data["reason"] = str(exc)
                     await self.publish()
                 else:
-                    await self.finish("completed" if exc.code == "trial_expired" else "stopped", str(exc))
+                    await self.finish("stopped", str(exc))
                 return
             entry.update(status="unknown" if exc.code == "send_unknown" else "failed", code=exc.code)
             await self.finish("error", "发送未确认，已停止且不会自动重试", str(exc))
@@ -252,7 +242,7 @@ class AutoDanmaku:
                     await self.tick()
                 if self.data["status"] != "active":
                     break
-                await asyncio.sleep(max(.1, min(2, self.next_due - time.monotonic(), self.deadline - time.monotonic())))
+                await asyncio.sleep(max(.1, min(2, self.next_due - time.monotonic())))
         except asyncio.CancelledError:
             raise
         except Exception:

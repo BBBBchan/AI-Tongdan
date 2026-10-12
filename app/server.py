@@ -65,7 +65,6 @@ class DanmakuRequest(BaseModel):
 class AutoDanmakuRequest(BaseModel):
     session_id: str
     interval_seconds: int = Field(default=300, ge=5, le=3600, strict=True)
-    duration_seconds: Literal[1800] = 1800
     max_messages: int = Field(default=6, ge=1, le=1000, strict=True)
 
 
@@ -844,8 +843,9 @@ def create_app(settings=None):
     async def start_auto_danmaku(payload: AutoDanmakuRequest):
         async with workspace.lock:
             try:
-                return await workspace.danmaku_auto.start(payload.session_id, payload.interval_seconds,
-                                                          payload.duration_seconds, payload.max_messages)
+                return await workspace.danmaku_auto.start(
+                    payload.session_id, interval_seconds=payload.interval_seconds,
+                    max_messages=payload.max_messages)
             except DanmakuSendError as exc:
                 raise HTTPException(exc.status_code, str(exc)) from None
 

@@ -8,9 +8,9 @@
   <title>AI同担—你的AI直播同担</title>
   <link rel="icon" type="image/png" href="/static/brand/ai-tongdan-logo.png">
   <link rel="apple-touch-icon" href="/static/brand/ai-tongdan-logo.png">
-  <link rel="stylesheet" href="/static/app.css?v=danmaku-chorus-1">
+  <link rel="stylesheet" href="/static/app.css?v=danmaku-copy-fill-1">
   <script defer src="/static/vendor/hls.min.js"></script>
-  <script defer src="/static/app.js?v=danmaku-chorus-1"></script>
+  <script defer src="/static/app.js?v=danmaku-copy-fill-1"></script>
 </head>
 <body>
   <header class="topbar">
@@ -59,12 +59,12 @@
             </div>
             <div id="danmaku-candidates" class="danmaku-candidates"><span class="danmaku-candidate-empty">理解直播内容后，这里会更新 5 条候选。</span></div>
             <section class="danmaku-chorus" aria-labelledby="danmaku-chorus-heading">
-              <div class="danmaku-candidate-heading"><strong id="danmaku-chorus-heading">大家在刷</strong><span>跟上队形！一键融入也会从这里选</span></div>
+              <div class="danmaku-candidate-heading"><div class="danmaku-chorus-heading-tools"><strong id="danmaku-chorus-heading">大家在刷</strong><button id="danmaku-copy-recent" class="quiet-button" type="button" title="随机复制近 2 秒收到的弹幕，并填入发送框">复制近 2 秒随机弹幕</button></div><span>跟上队形！一键融入也会从这里选</span></div>
               <div id="danmaku-chorus-items" class="danmaku-chorus-items"></div>
               <p id="danmaku-chorus-empty" class="danmaku-candidate-empty">还没有集中复读，大家刷起来时会自动出现。</p>
             </section>
             <form id="danmaku-send-form" class="danmaku-send-form"><label for="danmaku-send-input" class="sr-only">要发送到直播间的弹幕</label><input id="danmaku-send-input" type="text" maxlength="100" autocomplete="off" placeholder="编辑弹幕，点击发送到当前直播间"><button id="danmaku-send-button" class="primary-button" type="submit" disabled>发送弹幕</button></form>
-            <div class="danmaku-compose-actions"><button id="danmaku-copy-recent" class="quiet-button" type="button">复制近 2 秒随机弹幕</button><button id="danmaku-login-toggle" class="text-link" type="button" aria-expanded="false" aria-controls="danmaku-login-form">配置本人登录</button></div>
+            <div class="danmaku-compose-actions"><button id="danmaku-login-toggle" class="text-link" type="button" aria-expanded="false" aria-controls="danmaku-login-form">配置本人登录</button></div>
             <div id="danmaku-auto" class="danmaku-auto" data-status="idle">
               <div class="danmaku-auto-heading"><strong>一键融入</strong><span id="danmaku-auto-status">未启动</span></div>
               <div class="danmaku-auto-settings"><label for="danmaku-auto-interval">基准间隔 <input id="danmaku-auto-interval" type="number" value="300" min="5" max="3600" step="1" inputmode="numeric" aria-describedby="danmaku-auto-range"> 秒</label><span id="danmaku-auto-range">随机 ±30% · 每次 210–390 秒</span></div>

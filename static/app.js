@@ -791,14 +791,26 @@
     finally { danmakuCredentialsSaving = false; $('danmaku-login-save').disabled = false; renderDanmakuComposer(); }
   }
   async function copyRecentDanmaku() {
+    const sid = state.session.id;
     const now = performance.now();
     recentDanmaku = recentDanmaku.filter(item => now - item.received <= 2000);
     const entries = recentDanmaku;
     $('danmaku-copy-fallback').hidden = true;
     if (!entries.length) { danmakuFeedback('最近 2 秒没有收到可复制的弹幕。'); return; }
     const text = entries[Math.floor(Math.random() * entries.length)].text;
-    try { if (!navigator.clipboard?.writeText) throw new Error('Clipboard unavailable'); await navigator.clipboard.writeText(text); danmakuFeedback(`已复制：${shortened(text,100)}`); }
-    catch { $('danmaku-copy-text').value = text; $('danmaku-copy-fallback').hidden = false; $('danmaku-copy-text').focus(); $('danmaku-copy-text').select(); danmakuFeedback('未能自动复制，文本已选中，请手动复制。'); }
+    $('danmaku-send-input').value = text;
+    renderDanmakuComposer();
+    $('danmaku-send-input').focus();
+    try {
+      if (!navigator.clipboard?.writeText) throw new Error('Clipboard unavailable');
+      await navigator.clipboard.writeText(text);
+      if (state.session.id === sid) danmakuFeedback(`已填入发送框并复制：${shortened(text,100)}`);
+    } catch {
+      if (state.session.id !== sid) return;
+      $('danmaku-copy-text').value = text; $('danmaku-copy-fallback').hidden = false;
+      $('danmaku-copy-text').focus(); $('danmaku-copy-text').select();
+      danmakuFeedback('已填入发送框；未能自动复制，下方文本已选中，可手动复制。');
+    }
   }
   function flyDanmaku(entry) {
     if (!overlayEnabled || playerMode !== 'native' || $('live-video').hidden || document.hidden) return;

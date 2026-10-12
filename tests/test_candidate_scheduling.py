@@ -44,7 +44,8 @@ async def test_deferred_candidates_eventually_refresh_without_interrupting_obser
         return await next_sleep()
 
     async def endpoint(request):
-        first = json.loads(request.content)["messages"][0]["content"]
+        payload = json.loads(request.content)
+        first = payload["messages"][0]["content"]
         name = first if first in {"observe-one", "observe-two", "question"} else "draft"
         requests.append(name)
         if name.startswith("observe"):
@@ -53,7 +54,9 @@ async def test_deferred_candidates_eventually_refresh_without_interrupting_obser
         if name == "question":
             await entered.put(name)
             await release_question.wait()
-        content = (json.dumps({"candidates": ["一起看直播", "刚才好有趣", "期待下一幕"]}, ensure_ascii=False)
+        if name == "draft":
+            assert payload["max_tokens"] == 360
+        content = (json.dumps({"candidates": ["一起看直播", "刚才好有趣", "期待下一幕", "挥手了哈哈", "招手好可爱"]}, ensure_ascii=False)
                    if name == "draft" else "问题已回答")
         return httpx.Response(200, json={"choices": [{"message": {"content": content}, "finish_reason": "stop"}]})
 
@@ -90,7 +93,9 @@ async def test_deferred_candidates_eventually_refresh_without_interrupting_obser
     monkeypatch.setattr(workspace.danmaku_sender, "send", send)
     monkeypatch.setattr(server_module, "time", SimpleNamespace(monotonic=lambda: clock.value, time=time.time))
     monkeypatch.setattr(server_module, "asyncio", SimpleNamespace(
-        sleep=controlled_sleep, wait_for=asyncio.wait_for, CancelledError=asyncio.CancelledError))
+        sleep=controlled_sleep, wait_for=asyncio.wait_for, CancelledError=asyncio.CancelledError,
+        create_task=asyncio.create_task, wait=asyncio.wait, FIRST_COMPLETED=asyncio.FIRST_COMPLETED,
+        gather=asyncio.gather))
 
     observations = [asyncio.create_task(model.complete_observation([
         {"role": "user", "content": name}])) for name in ("observe-one", "observe-two")]
@@ -137,7 +142,7 @@ async def test_deferred_candidates_eventually_refresh_without_interrupting_obser
         assert requests.count("draft") == 1
         assert workspace.danmaku_candidates["status"] == "ready"
         assert [item["text"] for item in workspace.danmaku_candidates["items"]] == [
-            "一起看直播", "刚才好有趣", "期待下一幕"]
+            "一起看直播", "刚才好有趣", "期待下一幕", "挥手了哈哈", "招手好可爱"]
         assert model._observation_requests == 2
         assert all(not task.done() for task in observations)
         assert emitted.count("generating") == 1

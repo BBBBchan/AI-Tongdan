@@ -138,23 +138,27 @@ async def test_auto_danmaku_routes_are_opt_in_bounded_and_session_scoped(tmp_pat
                 "cookie": "SESSDATA=integration-session; bili_jct=integration-csrf"})
             wrong = await client.post("/api/danmaku/auto/start", json={"session_id": "old"})
             assert wrong.status_code == 409
-            for invalid in ({"interval_seconds": 299}, {"duration_seconds": 1801}, {"max_messages": 7}):
+            for invalid in ({"interval_seconds": 4}, {"interval_seconds": 3601},
+                            {"interval_seconds": 60.5}, {"interval_seconds": True},
+                            {"duration_seconds": 1801}, {"max_messages": 7}):
                 response = await client.post("/api/danmaku/auto/start", json={"session_id": sid, **invalid})
                 assert response.status_code == 422
             assert workspace.danmaku_auto.task is None and not entered.is_set()
             started = await client.post("/api/danmaku/auto/start", json={
-                "session_id": sid, "interval_seconds": 300, "duration_seconds": 1800, "max_messages": 6})
+                "session_id": sid, "interval_seconds": 60, "duration_seconds": 1800, "max_messages": 6})
             assert started.status_code == 200
             payload = started.json()
             assert payload["status"] == "active" and payload["session_id"] == sid
             assert payload["room_id"] == workspace.room.room_id
             assert payload["sent_count"] == 0 and payload["max_messages"] == 6
-            assert payload["interval_seconds"] == 300 and payload["ends_at"] - payload["started_at"] == 1800
+            assert payload["interval_seconds"] == 60 and payload["jitter_ratio"] == .3
+            assert payload["ends_at"] - payload["started_at"] == 1800
             await asyncio.wait_for(entered.wait(), 1)
             runner = workspace.danmaku_auto.task
             assert not runner.done()
             repeated = await client.post("/api/danmaku/auto/start", json={"session_id": sid})
             assert repeated.json()["started_at"] == payload["started_at"]
+            assert repeated.json()["interval_seconds"] == 60
             assert workspace.danmaku_auto.task is runner
             wrong_stop = await client.post("/api/danmaku/auto/stop", json={"session_id": "old"})
             assert wrong_stop.status_code == 409 and not workspace.danmaku_auto.stop_requested

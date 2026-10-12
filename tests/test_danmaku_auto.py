@@ -41,6 +41,8 @@ class Workspace:
         self.agent = SimpleNamespace(_observer_snapshot=lambda: {"understanding_age_seconds": self.age})
         self.danmaku = []
         self.danmaku_candidates = {}
+        self.danmaku_style = {"value": 30, "revision": 0}
+        self.pending_danmaku_style_updates = 0
         self.last_danmaku_sent_at = None
         self.clock = clock
         self.events = []
@@ -75,6 +77,7 @@ class Workspace:
     def seed(self, text="杯子抢镜了", **overrides):
         self.danmaku_candidates = {
             "session_id": self.session["id"], "generated_at": self.clock.time(),
+            "style_revision": self.danmaku_style["revision"],
             "sources": {"visual": True}, "status": "ready", "items": [{"text": text}],
             **overrides,
         }
@@ -84,6 +87,7 @@ class Workspace:
 async def trial(tmp_path, monkeypatch):
     clock = Clock()
     monkeypatch.setattr(auto_module, "time", clock)
+    monkeypatch.setattr(auto_module.random, "uniform", lambda lower, upper: (lower + upper) / 2)
     ws = Workspace(tmp_path, clock)
     auto = AutoDanmaku(ws)
 
@@ -107,7 +111,10 @@ async def tick(auto):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("change,expected", [("stop", "stopped"), ("deadline", "completed"), ("stale", "active")])
+@pytest.mark.parametrize("change,expected", [
+    ("stop", "stopped"), ("deadline", "completed"), ("stale", "active"), ("style", "active"),
+    ("pending-style", "active"),
+])
 async def test_rechecks_trial_at_post_boundary_after_authentication(trial, change, expected):
     auto, ws, clock = trial
     await auto.start(ws.session["id"])
@@ -119,6 +126,12 @@ async def test_rechecks_trial_at_post_boundary_after_authentication(trial, chang
     async def authentication_then_guard(sid, text, *, before_post):
         if change == "stop":
             auto.stop_requested = True
+        elif change == "style":
+            ws.danmaku_style = {"value": 100, "revision": 1}
+            ws.seed("新风格已经生成")
+        elif change == "pending-style":
+            # The HTTP style update has arrived but cannot acquire the send lock yet.
+            ws.pending_danmaku_style_updates += 1
         clock.advance(31 if change == "stale" else 2)
         before_post()
         pytest.fail("Stopped, expired or stale trial must not POST")
@@ -128,6 +141,9 @@ async def test_rechecks_trial_at_post_boundary_after_authentication(trial, chang
     assert auto.data["status"] == expected
     assert auto.data["sent_count"] == 0
     assert auto.data["history"][0]["status"] == "not_sent"
+    if change == "pending-style":
+        assert ws.danmaku_style["revision"] == 0
+        assert auto.data["history"][0]["code"] == "trial_stale"
     assert not ws.attempts
 
 
@@ -163,13 +179,26 @@ async def test_starts_disabled_and_never_restores_an_active_trial(tmp_path):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("kwargs", [
-    {"interval_seconds": 299}, {"duration_seconds": 1801}, {"max_messages": 7},
+    {"interval_seconds": value} for value in (4, 0, True, "60", float("nan"), 3601, 60.5)
+] + [
+    {"duration_seconds": 1801}, {"max_messages": 7},
 ])
 async def test_only_authorized_trial_limits_are_accepted(trial, kwargs):
     auto, ws, _ = trial
     with pytest.raises(DanmakuSendError):
         await auto.start(ws.session["id"], **kwargs)
     assert auto.task is None and auto.data["status"] == "idle"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("interval", [5, 60, 300, 3600])
+async def test_valid_integer_base_intervals_can_start(trial, interval):
+    auto, ws, _ = trial
+    state = await auto.start(ws.session["id"], interval_seconds=interval)
+    assert state["status"] == "active" and state["interval_seconds"] == interval
+    assert state["max_messages"] == 6 and state["jitter_ratio"] == 0.3
+    assert state["next_interval_seconds"] is None
+    assert auto.task is not None and ws.attempts == []
 
 
 @pytest.mark.asyncio
@@ -206,7 +235,7 @@ async def test_repeated_start_preserves_quota_deadline_and_single_task(trial):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("invalid", [
-    "expired", "future", "before-start", "no-sources", "duplicate", "copied", "old-session",
+    "expired", "future", "before-start", "no-sources", "duplicate", "copied", "old-session", "old-style", "pending-style",
     "late-understanding", "missing-understanding", "nan-understanding", "long", "control", "surrogate",
 ])
 async def test_stale_repeated_copied_or_invalid_candidates_are_skipped(trial, invalid):
@@ -228,6 +257,10 @@ async def test_stale_repeated_copied_or_invalid_candidates_are_skipped(trial, in
         ws.danmaku = [{"text": "  杯子抢镜了  "}]
     elif invalid == "old-session":
         ws.danmaku_candidates["session_id"] = "previous-session"
+    elif invalid == "old-style":
+        ws.danmaku_style["revision"] += 1
+    elif invalid == "pending-style":
+        ws.pending_danmaku_style_updates += 1
     elif invalid == "late-understanding":
         ws.age = 15.1
     elif invalid == "missing-understanding":
@@ -275,6 +308,120 @@ async def test_missed_clock_slots_never_create_a_catch_up_burst(trial):
         await tick(auto)
     assert len(ws.attempts) == 2
     assert auto.next_due == clock.monotonic() + 300
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("edge,seconds", [("lower", 42), ("upper", 78)])
+async def test_sixty_second_base_uses_jitter_bounds_and_does_not_reroll_on_poll_or_start(
+        trial, monkeypatch, edge, seconds):
+    auto, ws, clock = trial
+    draws = []
+
+    def draw(lower, upper):
+        draws.append((lower, upper))
+        return lower if edge == "lower" else upper
+
+    monkeypatch.setattr(auto_module.random, "uniform", draw)
+    await auto.start(ws.session["id"], interval_seconds=60)
+    assert draws == []
+    ws.seed()
+    await tick(auto)
+    assert draws == [(42, 78)]
+    due, wall_due = auto.next_due, auto.data["next_send_at"]
+    assert due == clock.monotonic() + seconds
+    assert wall_due == clock.time() + seconds
+    assert auto.data["next_interval_seconds"] == seconds
+    clock.advance(seconds - 1)
+    ws.seed("下一轮的新候选")
+    for _ in range(3):
+        await tick(auto)
+    repeated = await auto.start(ws.session["id"], interval_seconds=60)
+    assert len(ws.attempts) == 1 and draws == [(42, 78)]
+    assert auto.next_due == due and repeated["next_send_at"] == wall_due
+
+
+@pytest.mark.asyncio
+async def test_success_draws_next_interval_from_send_completion(trial, monkeypatch):
+    auto, ws, clock = trial
+    values = iter([42, 78])
+    draws = []
+
+    def draw(lower, upper):
+        draws.append((lower, upper, clock.monotonic()))
+        return next(values)
+
+    monkeypatch.setattr(auto_module.random, "uniform", draw)
+    await auto.start(ws.session["id"], interval_seconds=60)
+    ws.send_delay = 5
+    ws.seed("第一条")
+    await tick(auto)
+    first_completed = clock.monotonic()
+    assert auto.next_due == first_completed + 42
+    clock.advance(42)
+    ws.seed("第二条")
+    await tick(auto)
+    second_completed = clock.monotonic()
+    assert second_completed == first_completed + 42 + 5
+    assert draws == [(42, 78, first_completed), (42, 78, second_completed)]
+    assert auto.next_due == second_completed + 78
+    assert auto.data["next_send_at"] == clock.time() + 78
+    assert auto.data["next_interval_seconds"] == 78 and len(ws.attempts) == 2
+
+
+@pytest.mark.asyncio
+async def test_missing_candidate_draws_one_new_slot_without_catch_up(trial, monkeypatch):
+    auto, ws, clock = trial
+    values = iter([42, 78])
+    draws = []
+
+    def draw(lower, upper):
+        draws.append((lower, upper))
+        return next(values)
+
+    monkeypatch.setattr(auto_module.random, "uniform", draw)
+    await auto.start(ws.session["id"], interval_seconds=60)
+    clock.advance(40)  # Initial candidate warm-up is over.
+    await tick(auto)
+    assert auto.data["skipped_count"] == 1 and ws.attempts == []
+    assert auto.next_due == clock.monotonic() + 42
+    assert auto.data["next_interval_seconds"] == 42 and draws == [(42, 78)]
+    for _ in range(3):
+        await tick(auto)
+    assert draws == [(42, 78)]
+    clock.advance(300)  # Several nominal slots elapsed while the scheduler was paused.
+    ws.seed("恢复后的新候选")
+    await tick(auto)
+    for _ in range(3):
+        await tick(auto)
+    assert len(ws.attempts) == 1 and auto.data["skipped_count"] == 1
+    assert draws == [(42, 78), (42, 78)]
+    assert auto.next_due == clock.monotonic() + 78
+
+
+@pytest.mark.asyncio
+async def test_second_empty_slot_within_first_twenty_five_seconds_is_not_warmup(trial, monkeypatch):
+    auto, ws, clock = trial
+    values = iter([3.5, 6.5])
+    draws = []
+
+    def draw(lower, upper):
+        draws.append((lower, upper))
+        return next(values)
+
+    monkeypatch.setattr(auto_module.random, "uniform", draw)
+    await auto.start(ws.session["id"], interval_seconds=5)
+    ws.seed("首条已成功发送")
+    await tick(auto)
+    assert auto.data["sent_count"] == 1 and len(ws.attempts) == 1
+    clock.advance(3.5)
+    assert clock.time() - auto.data["started_at"] < 25
+    ws.danmaku_candidates["items"] = []
+    await tick(auto)
+    assert auto.data["skipped_count"] == 1 and len(ws.attempts) == 1
+    assert draws == [(3.5, 6.5), (3.5, 6.5)]
+    assert auto.data["next_interval_seconds"] == 6.5
+    assert auto.next_due == clock.monotonic() + 6.5
+    assert auto.data["next_send_at"] == clock.time() + 6.5
 
 
 @pytest.mark.asyncio

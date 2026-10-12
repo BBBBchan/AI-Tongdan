@@ -56,17 +56,20 @@ class AutoDanmaku:
             raise DanmakuSendError("请先连接正在直播的房间。", 409)
         if not ws.danmaku_credentials.status()["configured"]:
             raise DanmakuSendError("请先配置本人弹幕登录。", 401)
-        if (interval_seconds, duration_seconds, max_messages) != (300, 1800, 6):
-            raise DanmakuSendError("当前试运行固定为每 5 分钟一条、30 分钟最多 6 条。")
+        if type(interval_seconds) is not int or not 5 <= interval_seconds <= 3600:
+            raise DanmakuSendError("发送间隔请输入 5–3600 秒的整数。")
+        if (duration_seconds, max_messages) != (1800, 6):
+            raise DanmakuSendError("一键融入每轮最多 30 分钟、6 条。")
         if self.data["status"] == "active":
             return self.snapshot()  # Repeated clicks cannot reset the quota.
         now = time.time()
         self.deadline = time.monotonic() + duration_seconds
-        self.next_due = time.monotonic()  # First eligible message, then >=5 min apart.
+        self.next_due = time.monotonic()  # First eligible message, then a randomized interval.
         self.sent_texts = set()
         self.data = {"status": "active", "session_id": session_id, "room_id": ws.room.room_id,
                      "started_at": now, "ends_at": now + duration_seconds, "next_send_at": now,
-                     "interval_seconds": interval_seconds, "max_messages": max_messages,
+                     "interval_seconds": interval_seconds, "jitter_ratio": 0.3,
+                     "next_interval_seconds": None, "max_messages": max_messages,
                      "sent_count": 0, "skipped_count": 0, "last_text": None,
                      "last_sent_at": None, "reason": "等待本轮新鲜候选", "error": None, "history": []}
         self.stop_requested = False
@@ -78,10 +81,17 @@ class AutoDanmaku:
         self.task = asyncio.create_task(self.run())
         return self.snapshot()
 
+    def _schedule_next(self):
+        """Draw once per slot; polling and reconnecting cannot reroll the due time."""
+        base = self.data["interval_seconds"]
+        interval = random.uniform(base * 0.7, base * 1.3)
+        self.next_due = time.monotonic() + interval
+        self.data.update(next_send_at=time.time() + interval, next_interval_seconds=interval)
+
     async def stop(self, reason="已手动停止"):
         self.stop_requested = True
         if self.data["status"] == "active":
-            self.data.update(status="stopped", reason=reason, next_send_at=None)
+            self.data.update(status="stopped", reason=reason, next_send_at=None, next_interval_seconds=None)
             task, self.task = self.task, None
             if task and task is not asyncio.current_task():
                 task.cancel()
@@ -91,7 +101,7 @@ class AutoDanmaku:
         return self.snapshot()
 
     async def finish(self, status, reason, error=None):
-        self.data.update(status=status, reason=reason, error=error, next_send_at=None)
+        self.data.update(status=status, reason=reason, error=error, next_send_at=None, next_interval_seconds=None)
         await self.publish()
 
     def choose(self):
@@ -100,6 +110,8 @@ class AutoDanmaku:
         generated = candidates.get("generated_at")
         # Old drafts remain useful for manual editing, but cannot be auto-sent.
         if (candidates.get("session_id") != self.data["session_id"]
+                or getattr(ws, "pending_danmaku_style_updates", 0)
+                or candidates.get("style_revision") != ws.danmaku_style["revision"]
                 or not isinstance(generated, (int, float)) or not math.isfinite(generated)
                 or not 0 <= time.time() - generated <= 30
                 or generated < self.data["started_at"]
@@ -147,13 +159,12 @@ class AutoDanmaku:
         # Give the first fresh candidate a brief warm-up without sending old
         # drafts. Later missing candidates skip an entire slot, never catch up.
         text = self.choose()
-        if not text and time.time() - self.data["started_at"] < 25:
+        if not text and self.data["sent_count"] == 0 and time.time() - self.data["started_at"] < 25:
             self.next_due = now + 2
             self.data["next_send_at"] = time.time() + 2
             return
-        self.next_due = now + self.data["interval_seconds"]
-        self.data["next_send_at"] = time.time() + self.data["interval_seconds"]
         if not text or (ws.last_danmaku_sent_at is not None and now - ws.last_danmaku_sent_at < 3):
+            self._schedule_next()
             self.data["skipped_count"] += 1
             self.data["reason"] = "本轮没有新鲜且不重复的候选，已跳过"
             await self.publish()
@@ -176,6 +187,7 @@ class AutoDanmaku:
             return
         text = self.choose()  # The room lookup may have outlived the evidence.
         if not text:
+            self._schedule_next()
             self.data["skipped_count"] += 1
             self.data["reason"] = "候选已过期，本轮跳过"
             await self.publish()
@@ -184,6 +196,7 @@ class AutoDanmaku:
         self.data["history"].append(entry)
         await self.publish()  # Record intent before POST; disk failure prevents send.
         generated = ws.danmaku_candidates["generated_at"]
+        style_revision = ws.danmaku_style["revision"]
 
         def before_post():
             # Authentication may await a slow upstream GET. Check again at the
@@ -195,7 +208,8 @@ class AutoDanmaku:
                 raise DanmakuSendError("本轮已停止或直播连接已变更，未发送。", 409, "trial_stopped")
             if time.monotonic() >= self.deadline:
                 raise DanmakuSendError("本轮时间已到，未发送。", 409, "trial_expired")
-            if not 0 <= time.time() - generated <= 30 or self.choose() is None:
+            if (style_revision != ws.danmaku_style["revision"]
+                    or not 0 <= time.time() - generated <= 30 or self.choose() is None):
                 raise DanmakuSendError("候选依据已过期，未发送。", 409, "trial_stale")
 
         try:
@@ -204,6 +218,7 @@ class AutoDanmaku:
             if exc.code in {"trial_stopped", "trial_expired", "trial_stale"}:
                 entry.update(status="not_sent", code=exc.code)
                 if exc.code == "trial_stale":
+                    self._schedule_next()
                     self.data["skipped_count"] += 1
                     self.data["reason"] = str(exc)
                     await self.publish()
@@ -217,11 +232,10 @@ class AutoDanmaku:
         self.data["sent_count"] += 1
         entry.update(status="accepted", sent_at=time.time())
         self.data.update(last_text=text, last_sent_at=entry["sent_at"], reason="Bilibili 已受理，等待下一轮")
-        self.next_due = time.monotonic() + self.data["interval_seconds"]
-        self.data["next_send_at"] = time.time() + self.data["interval_seconds"]
         if self.data["sent_count"] >= self.data["max_messages"]:
             await self.finish("completed", "已发送 6 条，本轮结束")
         else:
+            self._schedule_next()
             await self.publish()
 
     async def run(self):
@@ -235,6 +249,6 @@ class AutoDanmaku:
         except asyncio.CancelledError:
             raise
         except Exception:
-            self.data.update(status="error", reason="自动弹幕已停止", error="处理异常，未自动重试，请检查发送记录。", next_send_at=None)
+            self.data.update(status="error", reason="一键融入已停止", error="处理异常，未自动重试，请检查发送记录。", next_send_at=None, next_interval_seconds=None)
             with suppress(Exception):
                 await self.publish()

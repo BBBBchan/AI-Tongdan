@@ -8,9 +8,9 @@
   <title>AI同担—你的AI直播同担</title>
   <link rel="icon" type="image/png" href="/static/brand/ai-tongdan-logo.png">
   <link rel="apple-touch-icon" href="/static/brand/ai-tongdan-logo.png">
-  <link rel="stylesheet" href="/static/app.css?v=auto-danmaku-1">
+  <link rel="stylesheet" href="/static/app.css?v=blend-in-1">
   <script defer src="/static/vendor/hls.min.js"></script>
-  <script defer src="/static/app.js?v=events-reconnect-1"></script>
+  <script defer src="/static/app.js?v=blend-in-1"></script>
 </head>
 <body>
   <header class="topbar">
@@ -51,14 +51,16 @@
           <div class="panel-heading"><h2>参与直播间</h2><span id="danmaku-send-status" class="subtle-status">尚未配置登录</span></div>
           <div class="danmaku-compose-body">
             <div class="danmaku-candidate-heading"><span>候选弹幕 · 点击填入，确认后发送</span><span id="danmaku-candidates-time"></span></div>
-            <div id="danmaku-candidates" class="danmaku-candidates"><span class="danmaku-candidate-empty">理解直播内容后，这里会更新 3 条候选。</span></div>
+            <div class="danmaku-style"><div class="danmaku-style-heading"><label for="danmaku-style-range">候选风格</label><span id="danmaku-style-label">轻松接梗</span></div><div class="danmaku-style-control"><span>纯良</span><input id="danmaku-style-range" type="range" min="0" max="100" step="1" value="30" aria-describedby="danmaku-style-label" disabled><span>开串</span></div><p id="danmaku-style-feedback" role="status" hidden></p></div>
+            <div id="danmaku-candidates" class="danmaku-candidates"><span class="danmaku-candidate-empty">理解直播内容后，这里会更新 5 条候选。</span></div>
             <form id="danmaku-send-form" class="danmaku-send-form"><label for="danmaku-send-input" class="sr-only">要发送到直播间的弹幕</label><input id="danmaku-send-input" type="text" maxlength="100" autocomplete="off" placeholder="编辑弹幕，点击发送到当前直播间"><button id="danmaku-send-button" class="primary-button" type="submit" disabled>发送弹幕</button></form>
             <div class="danmaku-compose-actions"><button id="danmaku-copy-recent" class="quiet-button" type="button">复制近 2 秒随机弹幕</button><button id="danmaku-login-toggle" class="text-link" type="button" aria-expanded="false" aria-controls="danmaku-login-form">配置本人登录</button></div>
             <div id="danmaku-auto" class="danmaku-auto" data-status="idle">
-              <div class="danmaku-auto-heading"><strong>自动弹幕 · 有限试运行</strong><span id="danmaku-auto-status">未启动</span></div>
-              <p id="danmaku-auto-detail">首条新候选就绪后发送，此后每 5 分钟一条；最多 30 分钟、6 条。</p>
+              <div class="danmaku-auto-heading"><strong>一键融入</strong><span id="danmaku-auto-status">未启动</span></div>
+              <div class="danmaku-auto-settings"><label for="danmaku-auto-interval">基准间隔 <input id="danmaku-auto-interval" type="number" value="300" min="5" max="3600" step="1" inputmode="numeric" aria-describedby="danmaku-auto-range"> 秒</label><span id="danmaku-auto-range">随机 ±30% · 每次 210–390 秒</span></div>
+              <p id="danmaku-auto-detail">首条新候选就绪后发送，此后按随机间隔接话。</p>
               <p id="danmaku-auto-last" class="danmaku-auto-last" hidden></p>
-              <div class="danmaku-auto-actions"><button id="danmaku-auto-start" class="quiet-button" type="button" disabled>启动自动发送 · 30 分钟</button><button id="danmaku-auto-stop" class="quiet-button" type="button" hidden>立即停止</button><span>切换直播间或下播时停止，重启后需重新启动。</span></div>
+              <div class="danmaku-auto-actions"><button id="danmaku-auto-start" class="quiet-button" type="button" disabled>一键融入</button><button id="danmaku-auto-stop" class="quiet-button" type="button" hidden>停止融入</button><span>本轮最多 30 分钟、6 条。切房或下播时停止，重启后需重新启动。</span></div>
               <p id="danmaku-auto-feedback" class="danmaku-send-feedback" role="status" hidden></p>
             </div>
             <p id="danmaku-send-feedback" class="danmaku-send-feedback" role="status" hidden></p>

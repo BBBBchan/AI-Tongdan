@@ -225,9 +225,9 @@ def test_selection_is_current_topic_grounded_and_excludes_existing_full_sentence
     assert "杯子颜色好看" in selected
     assert "杯子抢镜了" not in selected and "杯子还会发光" not in selected
     assert "遥远星球的旧剧情" not in selected and "虚构角色甲的往事" not in selected
-    assert len(selected) <= 3  # one related expression plus at most two generic expressions
+    assert len(selected) <= 4  # one related expression plus three portable voice references
     unrelated = store.select(context("人物正在直播画面中"), 30)
-    assert len(unrelated) <= 2
+    assert len(unrelated) <= 3
     assert all(item in {"哈哈", "好耶", "真的假的", "笑死我了"} for item in unrelated)
 
 
@@ -242,13 +242,109 @@ def test_rotation_style_ranking_and_output_limits(tmp_path):
     assert all(next(sample.style for sample in store._index.samples if sample.text == text) == 10 for text in gentle)
     edgy = store.select(context(), 100, limit=3)
     assert all(next(sample.style for sample in store._index.samples if sample.text == text) == 90 for text in edgy)
-    first = store.select(context(), 30, limit=6)
-    second = store.select(context(), 30, limit=6)
+    first = store.select(context(), 70, limit=6)
+    second = store.select(context(), 70, limit=6)
     assert set(first) != set(second)
     assert len(second) <= 6
     assert sum(map(len, second)) <= 192
     assert all(len(text) <= 48 for text in second)
     assert store.select(context(), 30, limit=0) == []
+
+
+@pytest.mark.parametrize("text", ["？", "???", "？！", "666", "1111", "哦哦", "嗯？", "啊？", "确实", "没看清", "这咋了", "哈哈哈哈"])
+def test_common_reaction_is_a_portable_closed_grammar(text):
+    assert corpus_module.is_common_reaction(text)
+
+
+@pytest.mark.parametrize("text", ["", "   ", "甲君", "王小明", "星球甲", "杯子颜色好看", "以前去了月球", "UID:123", "1234567", "[表情]", "哈哈\n", "\u202e哈哈", "?????????", "。", "abc"])
+def test_arbitrary_names_claims_identifiers_and_empty_punctuation_are_not_reactions(text):
+    assert not corpus_module.is_common_reaction(text)
+
+
+def test_frequent_short_reactions_survive_long_tail_sampling_and_keep_counts(tmp_path, monkeypatch):
+    monkeypatch.setattr(corpus_module, "MAX_PER_FILE", 20)
+    write(tmp_path, "a.json", {"messages": [f"杯子第{i}种舞台效果" for i in range(200)] + ["确实"] * 100 + ["？"] * 80})
+    write(tmp_path, "b.json", {"messages": ["确实"] * 50})
+    store = DanmakuCorpus(tmp_path)
+    store.refresh()
+    indexed = {sample.text: sample for sample in store._index.samples}
+    assert indexed["确实"].frequency == 150
+    assert indexed["？"].frequency == 80
+    assert len(indexed) == 20
+    assert sum("杯子" in text for text in indexed) == 18  # Long tail still has most slots.
+    revision = store.snapshot()["revision"]
+    write(tmp_path, "b.json", {"messages": ["确实"] * 51})
+    assert store.refresh()
+    assert store.snapshot()["revision"] == revision + 1
+    assert next(s.frequency for s in store._index.samples if s.text == "确实") == 151
+
+
+def test_dense_topic_does_not_crowd_out_short_corpus_voice(tmp_path):
+    write(tmp_path, "a.json", {"messages": [f"蓝色杯子舞台灯光第{i}种组合还挺有意思" for i in range(30)]
+        + ["确实"] * 100 + ["嗯？"] * 80 + ["没看清"] * 50 + ["虚构人物甲的旧事"] * 200})
+    store = DanmakuCorpus(tmp_path)
+    store.refresh()
+    selected = store.select(context("蓝色杯子舞台灯光的组合"), 23)
+    assert len(selected) == 6
+    assert sum(corpus_module.is_common_reaction(text) for text in selected) == 3
+    assert sum("杯子" in text for text in selected) == 3
+    assert "虚构人物甲的旧事" not in selected
+
+
+def test_voice_words_in_current_chat_cannot_also_take_topic_slots(tmp_path):
+    write(tmp_path, "a.json", {"messages": [
+        "杯子怎么跑到边上去了", "杯子差点掉下来了", "杯子颜色还挺特别", "杯子又被举起来了",
+    ] + ["哈哈"] * 1000 + ["哈哈哈"] * 900 + ["嘿嘿"] * 800
+       + ["笑死我了"] * 700 + ["确实"] * 600 + ["好好好"] * 500 + ["？"] * 400})
+    store = DanmakuCorpus(tmp_path)
+    store.refresh()
+    current = context()
+    current["audience_comments"] = [{"text": "哈哈哈笑死我了，确实好好好"}]
+    selected = store.select(current, 30)
+    assert len(selected) == 6
+    assert sum("杯子" in text for text in selected) == 3
+    reactions = [text for text in selected if corpus_module.is_common_reaction(text)]
+    assert len(reactions) == len({corpus_module._reaction_family(text) for text in reactions}) == 3
+
+
+def test_reaction_variants_do_not_fill_all_slots_when_corpus_lacks_other_voice(tmp_path):
+    write(tmp_path, "a.json", {"messages": ["哈哈", "哈哈哈", "嘿嘿", "笑死我了", "？", "？？", "?!"]})
+    store = DanmakuCorpus(tmp_path)
+    store.refresh()
+    selected = store.select(context("无匹配话题"), 30)
+    assert len(selected) == 2
+    assert {corpus_module._reaction_family(text) for text in selected} == {"laughter", "punctuation"}
+
+
+def test_portable_reference_and_candidate_reuse_use_identical_classification(tmp_path):
+    write(tmp_path, "a.json", {"messages": ["好家伙好家伙好家伙", "可以可以可以可以可以", "哈哈", "确实", "？"]})
+    store = DanmakuCorpus(tmp_path)
+    store.refresh()
+    assert all(sample.generic == corpus_module.is_common_reaction(sample.text) for sample in store._index.samples)
+    assert all(corpus_module.is_common_reaction(text) for text in store.select(context("无匹配话题"), 30))
+
+
+def test_many_matching_topic_terms_cannot_override_gentle_slider(tmp_path):
+    write(tmp_path, "a.json", {"messages": [
+        "蓝色杯子舞台灯光就这", "蓝色杯子舞台灯光逆天", "杯子好看", "确实", "哈哈", "没看清",
+    ]})
+    store = DanmakuCorpus(tmp_path)
+    store.refresh()
+    selected = store.select(context("蓝色杯子舞台灯光"), 10)
+    assert "蓝色杯子舞台灯光就这" not in selected
+    assert "蓝色杯子舞台灯光逆天" not in selected
+    assert "杯子好看" in selected
+
+
+def test_frequent_reaction_ranks_ahead_of_singletons_without_repeating_forever(tmp_path):
+    write(tmp_path, "a.json", {"messages": ["确实"] * 100 + ["没看清"] * 90 + ["懂了"] * 80
+        + ["来了", "不知道", "这咋了", "等会", "什么意思", "又来了"]})
+    store = DanmakuCorpus(tmp_path)
+    store.refresh()
+    first = store.select(context("无匹配话题"), 30)
+    second = store.select(context("无匹配话题"), 30)
+    assert set(first) == {"确实", "没看清", "懂了"}
+    assert len(second) == 3 and set(first) != set(second)
 
 
 def test_total_reference_character_budget_is_enforced_for_longer_expressions(tmp_path):

@@ -13,6 +13,8 @@ __pycache__/
 /data/
 /models/
 /test-results/
+# Local danmaku / Super Chat source records; never needed at runtime
+/danmakus_style/
 *.private.*
 bilibili_cookie*.txt
 *.pem

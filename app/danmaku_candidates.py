@@ -3,6 +3,8 @@ import json
 import math
 import re
 
+from .danmaku_voice import voice_instruction
+
 
 def _style_value(value=30):
     if isinstance(value, bool) or not isinstance(value, int) or not 0 <= value <= 100:
@@ -16,7 +18,7 @@ def _style_instruction(value):
     elif value <= 40:
         style = "轻松接梗：轻松口语，适量表情，自然接住当前弹幕的梗，不硬凑。"
     elif value <= 60:
-        style = "玩梗：增加有依据的夸张、拟人或自嘲，梗要来自当前直播情境。"
+        style = "玩梗：增加有依据的短反问、夸张或自嘲，梗要来自当前直播情境。"
     elif value <= 80:
         style = "吐槽：围绕节目效果、操作或反差调侃，可以更犀利，但只针对情境。"
     else:
@@ -119,11 +121,13 @@ def candidate_context(snapshot, source_time=None):
 async def generate_candidates(model, context, max_length=20, *, allow_observations_busy=False):
     if not any(context.get(k) for k in ("visual", "audio_transcripts", "audience_comments")):
         return []
-    style_instruction = _style_instruction(_style_value(context.get("style_value", 30)))
+    style_value = _style_value(context.get("style_value", 30))
+    style_instruction = _style_instruction(style_value)
     messages = [{"role": "system", "content": (
         "你为观看直播的用户拟写5条不同的简短弹幕候选，只生成草稿，不发送。"
         f"每条1到{max_length}个UTF-16单位（常见汉字计1，emoji通常计2），不带序号、引号或换行。"
         f"{style_instruction}"
+        f"{voice_instruction(style_value)}"
         "先看audience_comments中最近观众的语气、句长、口语、梗和表情节奏，顺着当前聊天氛围写。"
         "audience_comments是最近30秒，audience_history是最近5分钟的历史采样，只辅助话题延续和风格。"
         "历史不能当作正在发生的事，旧话题必须有当前画面、声音或最近弹幕的新证据才能接。"

@@ -92,6 +92,8 @@ def test_candidate_generation_works_in_source_only_isolated_copy(portable_app, s
         async def check():
             model = Model()
             context = candidates.candidate_context(snapshot, source_time=100)
+            assert context["style_mode"] == "builtin"
+            context["style_references"] = ["PORTABLE_MODE_MUST_IGNORE_PRIVATE_REFERENCES"]
             result = await candidates.generate_candidates(model, context)
             assert result == expected and len(result) == 5
             assert len(model.calls) == 1
@@ -100,6 +102,8 @@ def test_candidate_generation_works_in_source_only_isolated_copy(portable_app, s
             assert rules in messages[0]["content"]
             assert rules not in messages[1]["content"]
             assert json.loads(messages[1]["content"])["style_value"] == style_value
+            assert not json.loads(messages[1]["content"]).get("style_references")
+            assert "PORTABLE_MODE_MUST_IGNORE_PRIVATE_REFERENCES" not in json.dumps(messages)
             assert options["json_mode"] is True
 
             # Prove the shipped rules provider is actually used by generation,

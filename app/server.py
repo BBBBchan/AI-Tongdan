@@ -26,6 +26,7 @@ from .audio import AudioPipeline
 from .bilibili import BilibiliClient
 from .config import ROOT, Settings
 from .danmaku_candidates import candidate_context, generate_candidates
+from .danmaku_corpus import DanmakuCorpus
 from .danmaku_auto import AutoDanmaku
 from .danmaku_send import DanmakuCredentials, DanmakuSender, DanmakuSendError
 from .events import EventBus
@@ -73,6 +74,7 @@ class AutoDanmakuStopRequest(BaseModel):
 class DanmakuStyleRequest(BaseModel):
     session_id: str
     style_value: int = Field(ge=0, le=100, strict=True)
+    mode: Literal["builtin", "local"] | None = None
 
 
 class Workspace:
@@ -100,15 +102,22 @@ class Workspace:
         self.last_danmaku_sent_at = None
         self.danmaku_send_error = None
         self.danmaku_candidates = {"items": [], "status": "waiting", "generated_at": None}
-        self.danmaku_style = {"value": 30, "revision": 0}
+        self.danmaku_style = {"value": 30, "revision": 0, "mode": "builtin"}
         try:
             with (settings.data_dir / "danmaku_preferences.json").open() as handle:
-                value = json.loads(handle.read(1024)).get("style_value")
+                preferences = json.loads(handle.read(1024))
+                value = preferences.get("style_value")
             if type(value) is int and 0 <= value <= 100:
                 self.danmaku_style["value"] = value
+            if preferences.get("mode") in {"builtin", "local"}:
+                self.danmaku_style["mode"] = preferences["mode"]
         except (OSError, ValueError, TypeError, AttributeError):
             pass
         self._candidate_refresh = asyncio.Event()
+        self.danmaku_corpus = DanmakuCorpus(ROOT / "danmakus_style")
+        self._corpus_task = None
+        self._corpus_last_check = None
+        self._corpus_error = False
         self.pending_danmaku_style_updates = 0
         self.danmaku_auto = AutoDanmaku(self)
 
@@ -165,6 +174,7 @@ class Workspace:
             "danmaku_send": self.danmaku_send_status(),
             "danmaku_candidates": dict(self.danmaku_candidates),
             "danmaku_style": dict(self.danmaku_style),
+            "danmaku_corpus": self.corpus_status(),
             "danmaku_auto": self.danmaku_auto.snapshot(),
         }
 
@@ -353,29 +363,70 @@ class Workspace:
                 return
             await asyncio.sleep(3)
 
-    async def set_danmaku_style(self, session_id, value):
+    def corpus_status(self):
+        status = dict(self.danmaku_corpus.snapshot())
+        if self._corpus_task and not self._corpus_task.done():
+            status["status"] = "loading"
+        elif self._corpus_error:
+            status["status"] = "error"
+        return status
+
+    def _request_corpus_refresh(self, force=False):
+        """Only local mode opts into disk access; indexing never awaits on the live path."""
+        if self.danmaku_style.get("mode", "builtin") != "local":
+            return None
+        if self._corpus_task and not self._corpus_task.done():
+            return self._corpus_task
+        now = time.monotonic()
+        if not force and self._corpus_last_check is not None and now - self._corpus_last_check < 5:
+            return None
+        self._corpus_last_check = now
+        self._corpus_task = asyncio.create_task(self._refresh_corpus())
+        return self._corpus_task
+
+    async def _refresh_corpus(self):
+        try:
+            changed = await asyncio.to_thread(self.danmaku_corpus.refresh)
+            self._corpus_error = False
+        except Exception:
+            changed = False
+            self._corpus_error = True
+        # Emit the completed state, not the still-running wrapper task state.
+        status = dict(self.danmaku_corpus.snapshot())
+        if self._corpus_error:
+            status["status"] = "error"
+        await self.emit("danmaku_corpus", status)
+        if changed and self.danmaku_style.get("mode", "builtin") == "local":
+            self._candidate_refresh.set()
+
+    async def set_danmaku_style(self, session_id, value, mode=None):
         """Update preference under the room lock; invalidate drafts before waking generation."""
         if not self.session or self.session["id"] != session_id:
             raise DanmakuSendError("直播会话已变更，请在当前房间调整风格。", 409)
         if type(value) is not int or not 0 <= value <= 100:
             raise DanmakuSendError("弹幕风格请输入 0–100 的整数。")
-        if value != self.danmaku_style["value"]:
+        mode = self.danmaku_style.get("mode", "builtin") if mode is None else mode
+        if mode not in {"builtin", "local"}:
+            raise DanmakuSendError("请选择内置风格或本地语料。")
+        if value != self.danmaku_style["value"] or mode != self.danmaku_style.get("mode", "builtin"):
             try:
                 target = self.settings.data_dir / "danmaku_preferences.json"
                 target.parent.mkdir(parents=True, exist_ok=True)
                 temp = target.with_suffix(".tmp")
-                temp.write_text(json.dumps({"style_value": value}), encoding="utf-8")
+                temp.write_text(json.dumps({"style_value": value, "mode": mode}), encoding="utf-8")
                 temp.replace(target)
             except OSError:
                 raise DanmakuSendError("无法保存弹幕风格，请检查数据目录。", 503) from None
-            self.danmaku_style = {"value": value, "revision": self.danmaku_style["revision"] + 1}
+            self.danmaku_style = {"value": value, "revision": self.danmaku_style["revision"] + 1, "mode": mode}
             self.danmaku_candidates = {"items": [], "status": "waiting", "generated_at": None,
                 "session_id": session_id, "style_revision": self.danmaku_style["revision"]}
             self._candidate_refresh.set()
             await self.emit("danmaku_style", dict(self.danmaku_style))
             await self.emit("danmaku_candidates", dict(self.danmaku_candidates))
+            self._request_corpus_refresh(force=True)
         return {"danmaku_style": dict(self.danmaku_style),
-                "danmaku_candidates": dict(self.danmaku_candidates)}
+                "danmaku_candidates": dict(self.danmaku_candidates),
+                "danmaku_corpus": self.corpus_status()}
 
     async def _candidate_pause(self, seconds):
         """Keep the normal cadence, but allow a changed style to wake it early."""
@@ -394,6 +445,7 @@ class Workspace:
         deferred_since = None
         while self.session and self.session["id"] == sid:
             self._candidate_refresh.clear()
+            self._request_corpus_refresh()
             started = time.monotonic()
             allow_observations_busy = False
             if self.settings.adaptive_observation and self.agent and self.model and self.model.configured:
@@ -426,6 +478,11 @@ class Workspace:
             evidence["danmaku_style"] = dict(self.danmaku_style)
             style_revision = self.danmaku_style["revision"]
             context = candidate_context(evidence, source_time=time.monotonic() - self.clock_start)
+            corpus_revision = self.danmaku_corpus.snapshot()["revision"]
+            if context["style_mode"] == "local":
+                # The bounded in-memory selector cannot read source files or
+                # make model calls. References are expression examples only.
+                context["style_references"] = self.danmaku_corpus.select(context, context["style_value"])
             signature = json.dumps(context, ensure_ascii=False, sort_keys=True)
             if not self.room or self.room.live_status != 1 or not self.model or not self.model.configured or not any(
                     context.get(key) for key in ("visual", "audio_transcripts", "audience_comments")):
@@ -442,12 +499,16 @@ class Workspace:
                         allow_observations_busy=allow_observations_busy), timeout=10)
                     if not self.session or self.session["id"] != sid:
                         return
-                    if style_revision != self.danmaku_style["revision"]:
+                    if (style_revision != self.danmaku_style["revision"] or
+                            (context["style_mode"] == "local" and
+                             corpus_revision != self.danmaku_corpus.snapshot()["revision"])):
                         continue  # A late response must not resurrect the old style.
                     self.danmaku_candidates = {"items": [{"id": uuid.uuid4().hex, "text": text}
                                                          for text in texts],
                         "generated_at": time.time(), "source_time": context["source_time"], "session_id": sid,
                         "style_revision": style_revision, "style_value": self.danmaku_style["value"],
+                        "reference_mode": "local" if context.get("style_references") else "builtin",
+                        "reference_count": len(context.get("style_references", [])),
                         "history_count": len(context.get("audience_history", [])),
                         "recently_sent_count": len(context.get("recently_sent", [])),
                         "sources": [key for key in ("visual", "audio_transcripts", "audience_comments")
@@ -588,6 +649,9 @@ class Workspace:
         # browser's explicit Disconnect prevents reconnection on the next boot.
         async with self.lock:
             await self._stop()
+        if self._corpus_task:
+            with suppress(asyncio.CancelledError, Exception):
+                await self._corpus_task
         await self.client.aclose()
         await self.danmaku_sender.close()
 
@@ -695,7 +759,7 @@ def create_app(settings=None):
         try:
             async with workspace.lock:
                 try:
-                    return await workspace.set_danmaku_style(payload.session_id, payload.style_value)
+                    return await workspace.set_danmaku_style(payload.session_id, payload.style_value, payload.mode)
                 except DanmakuSendError as exc:
                     raise HTTPException(exc.status_code, str(exc)) from None
         finally:

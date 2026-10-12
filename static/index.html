@@ -8,9 +8,9 @@
   <title>AI同担—你的AI直播同担</title>
   <link rel="icon" type="image/png" href="/static/brand/ai-tongdan-logo.png">
   <link rel="apple-touch-icon" href="/static/brand/ai-tongdan-logo.png">
-  <link rel="stylesheet" href="/static/app.css?v=blend-in-1">
+  <link rel="stylesheet" href="/static/app.css?v=local-corpus-1">
   <script defer src="/static/vendor/hls.min.js"></script>
-  <script defer src="/static/app.js?v=blend-in-1"></script>
+  <script defer src="/static/app.js?v=local-corpus-1"></script>
 </head>
 <body>
   <header class="topbar">
@@ -51,7 +51,12 @@
           <div class="panel-heading"><h2>参与直播间</h2><span id="danmaku-send-status" class="subtle-status">尚未配置登录</span></div>
           <div class="danmaku-compose-body">
             <div class="danmaku-candidate-heading"><span>候选弹幕 · 点击填入，确认后发送</span><span id="danmaku-candidates-time"></span></div>
-            <div class="danmaku-style"><div class="danmaku-style-heading"><label for="danmaku-style-range">候选风格</label><span id="danmaku-style-label">轻松接梗</span></div><div class="danmaku-style-control"><span>纯良</span><input id="danmaku-style-range" type="range" min="0" max="100" step="1" value="30" aria-describedby="danmaku-style-label" disabled><span>开串</span></div><p id="danmaku-style-feedback" role="status" hidden></p></div>
+            <div class="danmaku-style">
+              <div class="danmaku-reference-control"><label for="danmaku-style-mode">风格来源</label><select id="danmaku-style-mode" aria-describedby="danmaku-reference-help" disabled><option value="builtin">内置风格</option><option value="local">本地语料</option></select></div>
+              <p id="danmaku-reference-help" class="danmaku-reference-help">开箱即用，无需准备 JSON；结合当前直播和弹幕接话。</p>
+              <div id="danmaku-corpus-detail" class="danmaku-corpus-detail" hidden><p id="danmaku-corpus-status" role="status">尚未加载本地语料</p><p>将 JSON 放入 <code>danmakus_style/</code>，文件变动后自动更新。每轮挑选少量正文参考表达方式，不照搬原句。</p><p>所选正文会发给你配置的模型；本地 JSON 不会随项目上传 GitHub。</p></div>
+              <div class="danmaku-style-heading"><label for="danmaku-style-range">候选风格</label><span id="danmaku-style-label">轻松接梗</span></div><div class="danmaku-style-control"><span>纯良</span><input id="danmaku-style-range" type="range" min="0" max="100" step="1" value="30" aria-describedby="danmaku-style-label" disabled><span>开串</span></div><p id="danmaku-style-feedback" role="status" hidden></p>
+            </div>
             <div id="danmaku-candidates" class="danmaku-candidates"><span class="danmaku-candidate-empty">理解直播内容后，这里会更新 5 条候选。</span></div>
             <form id="danmaku-send-form" class="danmaku-send-form"><label for="danmaku-send-input" class="sr-only">要发送到直播间的弹幕</label><input id="danmaku-send-input" type="text" maxlength="100" autocomplete="off" placeholder="编辑弹幕，点击发送到当前直播间"><button id="danmaku-send-button" class="primary-button" type="submit" disabled>发送弹幕</button></form>
             <div class="danmaku-compose-actions"><button id="danmaku-copy-recent" class="quiet-button" type="button">复制近 2 秒随机弹幕</button><button id="danmaku-login-toggle" class="text-link" type="button" aria-expanded="false" aria-controls="danmaku-login-form">配置本人登录</button></div>

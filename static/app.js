@@ -686,19 +686,29 @@
     const value = raw === '' ? NaN : Number(raw);
     return !input?.validity.badInput && Number.isInteger(value) && value >= 5 && value <= 3600 ? value : null;
   }
+  function danmakuCountValue() {
+    const input = $('danmaku-auto-count'), raw = input?.value.trim() || '';
+    const value = raw === '' ? NaN : Number(raw);
+    return !input?.validity.badInput && Number.isInteger(value) && value >= 1 && value <= 1000 ? value : null;
+  }
   function danmakuSeconds(value) { return Number(value).toLocaleString('zh-CN',{maximumFractionDigits:1,useGrouping:false}); }
   function renderDanmakuAuto() {
-    const panel = $('danmaku-auto'), input = $('danmaku-auto-interval'); if (!panel || !input) return;
+    const panel = $('danmaku-auto'), input = $('danmaku-auto-interval'), countInput = $('danmaku-auto-count'); if (!panel || !input || !countInput) return;
     const auto = state.danmaku_auto || {}, active = auto.status === 'active';
     const status = auto.status || 'idle', sent = Number(auto.sent_count) || 0, limit = Number(auto.max_messages) || 6;
     const effectiveInterval = finiteTime(auto.interval_seconds);
-    // Only a running trial owns this field. State refreshes must preserve an
-    // interval the user is still editing for the next trial.
+    // Only a running trial owns these fields. State refreshes must preserve
+    // settings the user is still editing for the next trial.
     if (active && effectiveInterval !== null && effectiveInterval >= 5 && effectiveInterval <= 3600) input.value = String(effectiveInterval);
+    if (active && Number.isInteger(limit) && limit >= 1 && limit <= 1000) countInput.value = String(limit);
     input.disabled = active || Boolean(danmakuAutoBusy);
-    const interval = danmakuIntervalValue(), serverJitter = finiteTime(auto.jitter_ratio);
+    countInput.disabled = active || Boolean(danmakuAutoBusy);
+    const interval = danmakuIntervalValue(), count = danmakuCountValue(), serverJitter = finiteTime(auto.jitter_ratio);
     const jitter = active && serverJitter !== null && serverJitter >= 0 && serverJitter <= 1 ? serverJitter : 0.3;
     input.setAttribute('aria-invalid',String(interval === null));
+    countInput.setAttribute('aria-invalid',String(count === null));
+    $('danmaku-auto-count-help').textContent = count === null ? '请输入 1–1000 之间的整数条数' : '填写 1–1000 的整数，默认 6 条';
+    $('danmaku-auto-limit-note').textContent = `${count === null ? '达到所填条数' : `达到 ${count} 条`}或 30 分钟即结束。切房或下播时停止，重启后需重新启动。`;
     $('danmaku-auto-range').textContent = interval === null ? '请输入 5–3600 之间的整数秒数' : `随机 ±${danmakuSeconds(jitter * 100)}% · 每次 ${danmakuSeconds(interval * (1 - jitter))}–${danmakuSeconds(interval * (1 + jitter))} 秒`;
     panel.dataset.status = status;
     $('danmaku-auto-status').textContent = ({active:`运行中 · 已发送 ${sent}/${limit} 条`,stopped:`已停止 · 已发送 ${sent}/${limit} 条`,completed:`已结束 · 已发送 ${sent}/${limit} 条`,error:`发送已停止 · 已发送 ${sent}/${limit} 条`,idle:'未启动'})[status] || '未启动';
@@ -708,8 +718,8 @@
     $('danmaku-auto-last').textContent = auto.last_text ? `最近发送${auto.last_sent_at ? ` ${formatTime(auto.last_sent_at)}` : ''}：${plain(auto.last_text)}` : '';
     $('danmaku-auto-last').hidden = !auto.last_text;
     $('danmaku-auto-start').hidden = active;
-    $('danmaku-auto-start').disabled = danmakuAutoBusy || interval === null || state.session.status !== 'live' || !state.danmaku_send.can_send;
-    $('danmaku-auto-start').title = interval === null ? '请填写有效的基准间隔' : state.session.status !== 'live' ? '直播中才可启动一键融入' : !state.danmaku_send.can_send ? '请先配置本人登录' : '使用当前间隔向直播间发送，最多 30 分钟、6 条';
+    $('danmaku-auto-start').disabled = danmakuAutoBusy || interval === null || count === null || state.session.status !== 'live' || !state.danmaku_send.can_send;
+    $('danmaku-auto-start').title = interval === null ? '请填写有效的基准间隔' : count === null ? '请填写有效的发送数量' : state.session.status !== 'live' ? '直播中才可启动一键融入' : !state.danmaku_send.can_send ? '请先配置本人登录' : `使用当前间隔向直播间发送，最多 ${count} 条或 30 分钟`;
     $('danmaku-auto-start').textContent = danmakuAutoBusy === 'start' ? '正在融入…' : '一键融入';
     $('danmaku-auto-stop').hidden = !active;
     $('danmaku-auto-stop').disabled = danmakuAutoBusy;
@@ -719,11 +729,12 @@
     if (danmakuAutoBusy || !state.session.id) return;
     if (start && (state.session.status !== 'live' || !state.danmaku_send.can_send || state.danmaku_auto.status === 'active')) return;
     const sid = state.session.id, feedback = $('danmaku-auto-feedback');
-    const interval = danmakuIntervalValue();
+    const interval = danmakuIntervalValue(), count = danmakuCountValue();
     if (start && interval === null) { feedback.textContent = '请填写 5–3600 之间的整数秒数。'; feedback.classList.add('error'); feedback.hidden = false; renderDanmakuAuto(); return; }
+    if (start && count === null) { feedback.textContent = '请填写 1–1000 之间的整数条数。'; feedback.classList.add('error'); feedback.hidden = false; renderDanmakuAuto(); return; }
     danmakuAutoBusy = start ? 'start' : 'stop'; feedback.hidden = true; renderDanmakuAuto();
     try {
-      const body = start ? {session_id:sid,interval_seconds:interval,duration_seconds:1800,max_messages:6} : {session_id:sid};
+      const body = start ? {session_id:sid,interval_seconds:interval,duration_seconds:1800,max_messages:count} : {session_id:sid};
       const result = await api(`/api/danmaku/auto/${start ? 'start' : 'stop'}`,{method:'POST',body:JSON.stringify(body)});
       if (state.session.id !== sid) return;
       const auto = result.danmaku_auto || result;
@@ -929,6 +940,7 @@
   $('danmaku-auto-start')?.addEventListener('click',() => setDanmakuAuto(true));
   $('danmaku-auto-stop')?.addEventListener('click',() => setDanmakuAuto(false));
   $('danmaku-auto-interval')?.addEventListener('input',renderDanmakuAuto);
+  $('danmaku-auto-count')?.addEventListener('input',renderDanmakuAuto);
   $('danmaku-style-range')?.addEventListener('pointerdown',() => { danmakuStyleEditing = true; });
   $('danmaku-style-range')?.addEventListener('input',() => { danmakuStyleEditing = true; renderDanmakuStyle(); });
   $('danmaku-style-range')?.addEventListener('change',setDanmakuStyle);

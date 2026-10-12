@@ -57,3 +57,5 @@
 .danmaku-sent-source[data-source="auto"]{color:#a7d8c1}
 .danmaku-sent-text{margin:3px 0 0;font-size:12px;line-height:1.65;color:var(--text);white-space:pre-wrap}
 @media(max-width:620px){.danmaku-sent-heading>span,.danmaku-sent-meta,.danmaku-sent-empty{font-size:11px}.danmaku-sent-text{font-size:13px}}
+
+#danmaku-auto-count-help{color:#829b9f}.danmaku-auto-settings:has(input[aria-invalid="true"]) #danmaku-auto-count-help{color:var(--danger)}

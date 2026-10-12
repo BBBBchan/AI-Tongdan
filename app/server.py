@@ -66,7 +66,7 @@ class AutoDanmakuRequest(BaseModel):
     session_id: str
     interval_seconds: int = Field(default=300, ge=5, le=3600, strict=True)
     duration_seconds: Literal[1800] = 1800
-    max_messages: Literal[6] = 6
+    max_messages: int = Field(default=6, ge=1, le=1000, strict=True)
 
 
 class AutoDanmakuStopRequest(BaseModel):

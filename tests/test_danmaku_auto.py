@@ -183,7 +183,9 @@ async def test_starts_disabled_and_never_restores_an_active_trial(tmp_path):
 @pytest.mark.parametrize("kwargs", [
     {"interval_seconds": value} for value in (4, 0, True, "60", float("nan"), 3601, 60.5)
 ] + [
-    {"duration_seconds": 1801}, {"max_messages": 7},
+    {"max_messages": value} for value in (0, -1, True, False, "3", 3.0, 3.5, float("nan"), 1001)
+] + [
+    {"duration_seconds": 1801},
 ])
 async def test_only_authorized_trial_limits_are_accepted(trial, kwargs):
     auto, ws, _ = trial
@@ -200,6 +202,17 @@ async def test_valid_integer_base_intervals_can_start(trial, interval):
     assert state["status"] == "active" and state["interval_seconds"] == interval
     assert state["max_messages"] == 6 and state["jitter_ratio"] == 0.3
     assert state["next_interval_seconds"] is None
+    assert auto.task is not None and ws.attempts == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("max_messages", [1, 3, 7, 1000])
+async def test_custom_integer_message_limits_can_start(trial, max_messages):
+    auto, ws, _ = trial
+    state = await auto.start(ws.session["id"], max_messages=max_messages)
+    assert state["status"] == "active" and state["max_messages"] == max_messages
+    assert state["ends_at"] - state["started_at"] == 1800
+    assert state["sent_count"] == 0 and state["jitter_ratio"] == .3
     assert auto.task is not None and ws.attempts == []
 
 
@@ -224,13 +237,14 @@ async def test_start_requires_current_live_session_and_login(trial, invalid):
 @pytest.mark.asyncio
 async def test_repeated_start_preserves_quota_deadline_and_single_task(trial):
     auto, ws, clock = trial
-    await auto.start(ws.session["id"])
+    await auto.start(ws.session["id"], max_messages=3)
     ws.seed()
     await tick(auto)
     task, deadline, next_due = auto.task, auto.deadline, auto.next_due
     clock.advance(15)
-    again = await auto.start(ws.session["id"])
+    again = await auto.start(ws.session["id"], interval_seconds=5, max_messages=1000)
     assert again["sent_count"] == 1 and len(again["history"]) == 1
+    assert again["max_messages"] == 3 and again["interval_seconds"] == 300
     assert auto.task is task and auto.deadline == deadline and auto.next_due == next_due
     assert auto.sent_texts == {"杯子抢镜了"}
 
@@ -427,20 +441,22 @@ async def test_second_empty_slot_within_first_twenty_five_seconds_is_not_warmup(
 
 
 @pytest.mark.asyncio
-async def test_stops_at_six_messages_without_a_seventh(trial):
+@pytest.mark.parametrize("max_messages", [1, 3, 6, 7])
+async def test_stops_exactly_at_configured_message_count(trial, max_messages):
     auto, ws, clock = trial
-    await auto.start(ws.session["id"])
-    for index in range(6):
+    await auto.start(ws.session["id"], interval_seconds=5, max_messages=max_messages)
+    for index in range(max_messages):
         if index:
-            clock.advance(300)
+            clock.advance(5)
         ws.seed(f"候选{index}")
         await tick(auto)
-    assert auto.data["status"] == "completed" and auto.data["sent_count"] == 6
-    assert auto.data["next_send_at"] is None
-    clock.advance(300)
-    ws.seed("不应发送第七条")
+    assert auto.data["status"] == "completed" and auto.data["sent_count"] == max_messages
+    assert auto.data["reason"] == f"已发送 {max_messages} 条，达到本轮数量上限"
+    assert auto.data["next_send_at"] is None and auto.data["next_interval_seconds"] is None
+    clock.advance(5)
+    ws.seed("达到设置数量后不应再发送")
     await tick(auto)
-    assert len(ws.attempts) == 6
+    assert len(ws.attempts) == max_messages
 
 
 @pytest.mark.asyncio
@@ -451,6 +467,21 @@ async def test_expired_trial_stops_without_sending_even_with_fresh_candidate(tri
     ws.seed()
     await tick(auto)
     assert auto.data["status"] == "completed" and ws.attempts == []
+    assert auto.data["reason"] == "本轮 30 分钟已结束，已发送 0/6 条"
+
+
+@pytest.mark.asyncio
+async def test_time_limit_still_stops_a_large_quota_and_reports_actual_count(trial):
+    auto, ws, clock = trial
+    await auto.start(ws.session["id"], max_messages=1000)
+    ws.seed()
+    await tick(auto)
+    clock.advance(1800)
+    ws.seed("时间已到不应发送")
+    await tick(auto)
+    assert len(ws.attempts) == 1 and auto.data["sent_count"] == 1
+    assert auto.data["status"] == "completed"
+    assert auto.data["reason"] == "本轮 30 分钟已结束，已发送 1/1000 条"
 
 
 @pytest.mark.asyncio

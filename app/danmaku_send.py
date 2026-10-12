@@ -1,4 +1,4 @@
-"""Explicit, authenticated Bilibili danmaku sends; never sends automatically.
+"""Authenticated Bilibili sends for manual actions and explicitly enabled trials.
 
 Protocol verified against official web assets on 2026-10-10:
 https://live.bilibili.com/732
@@ -7,11 +7,12 @@ https://s1.hdslb.com/bfs/static/blive/blfe-live-room/static/js/app.3f7250563d649
 The player posts /msg/send with Cookie + bili_jct CSRF and WBI-signed query;
 the room app defaults to 20 UTF-16 code units unless account privileges differ.
 Selected source evidence is in test-results/danmaku-send/protocol-evidence.json.
-Only the caller's deliberate send action should invoke DanmakuSender.send().
+Only a deliberate send action or a bounded, user-enabled trial invokes send().
 """
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
 from http.cookies import CookieError, SimpleCookie
 import json
 import os
@@ -167,7 +168,7 @@ class DanmakuSender:
             raise DanmakuSendError(f"Bilibili 未受理弹幕（错误码 {code}），请到官方直播间检查账号、禁言或发送限制。", 409, "platform_rejected")
         return payload
 
-    async def send(self, room_id: int, text: str) -> dict:
+    async def send(self, room_id: int, text: str, *, before_post: Callable[[], None] | None = None) -> dict:
         try:
             room_id = parse_room_id(room_id)
         except ValueError:
@@ -205,6 +206,11 @@ class DanmakuSender:
                         "csrf": csrf, "csrf_token": csrf}
                 # The official web player uses FormData. Never retry a POST:
                 # even a timeout can mean it was accepted and the reply was lost.
+                # A trial may have stopped or expired while login was checked.
+                # This synchronous guard runs after every preceding await and
+                # immediately before the external send, without a yield in between.
+                if before_post is not None:
+                    before_post()
                 response = await self._client.post(API + "/msg/send", params=query, headers=headers,
                     files={name: (None, value) for name, value in body.items()}, follow_redirects=False)
                 payload = self._payload(response)

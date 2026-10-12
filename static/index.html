@@ -8,9 +8,9 @@
   <title>AI同担—你的AI直播同担</title>
   <link rel="icon" type="image/png" href="/static/brand/ai-tongdan-logo.png">
   <link rel="apple-touch-icon" href="/static/brand/ai-tongdan-logo.png">
-  <link rel="stylesheet" href="/static/app.css?v=understanding-timing-1">
+  <link rel="stylesheet" href="/static/app.css?v=auto-danmaku-1">
   <script defer src="/static/vendor/hls.min.js"></script>
-  <script defer src="/static/app.js"></script>
+  <script defer src="/static/app.js?v=auto-danmaku-1"></script>
 </head>
 <body>
   <header class="topbar">
@@ -54,6 +54,13 @@
             <div id="danmaku-candidates" class="danmaku-candidates"><span class="danmaku-candidate-empty">理解直播内容后，这里会更新 3 条候选。</span></div>
             <form id="danmaku-send-form" class="danmaku-send-form"><label for="danmaku-send-input" class="sr-only">要发送到直播间的弹幕</label><input id="danmaku-send-input" type="text" maxlength="100" autocomplete="off" placeholder="编辑弹幕，点击发送到当前直播间"><button id="danmaku-send-button" class="primary-button" type="submit" disabled>发送弹幕</button></form>
             <div class="danmaku-compose-actions"><button id="danmaku-copy-recent" class="quiet-button" type="button">复制近 2 秒随机弹幕</button><button id="danmaku-login-toggle" class="text-link" type="button" aria-expanded="false" aria-controls="danmaku-login-form">配置本人登录</button></div>
+            <div id="danmaku-auto" class="danmaku-auto" data-status="idle">
+              <div class="danmaku-auto-heading"><strong>自动弹幕 · 有限试运行</strong><span id="danmaku-auto-status">未启动</span></div>
+              <p id="danmaku-auto-detail">首条新候选就绪后发送，此后每 5 分钟一条；最多 30 分钟、6 条。</p>
+              <p id="danmaku-auto-last" class="danmaku-auto-last" hidden></p>
+              <div class="danmaku-auto-actions"><button id="danmaku-auto-start" class="quiet-button" type="button" disabled>启动自动发送 · 30 分钟</button><button id="danmaku-auto-stop" class="quiet-button" type="button" hidden>立即停止</button><span>切换直播间或下播时停止，重启后需重新启动。</span></div>
+              <p id="danmaku-auto-feedback" class="danmaku-send-feedback" role="status" hidden></p>
+            </div>
             <p id="danmaku-send-feedback" class="danmaku-send-feedback" role="status" hidden></p>
             <div id="danmaku-copy-fallback" hidden><label for="danmaku-copy-text">浏览器未允许复制，请复制下方已选中的文本：</label><textarea id="danmaku-copy-text" rows="2" readonly></textarea></div>
             <form id="danmaku-login-form" class="danmaku-login-form" hidden><label for="danmaku-cookie">本人 Bilibili 登录 Cookie</label><textarea id="danmaku-cookie" rows="2" autocomplete="off" spellcheck="false" placeholder="粘贴本人的登录 Cookie，仅保存在本机"></textarea><div><span>用于你本人账号发送；保存后会清空此输入。</span><button id="danmaku-login-save" class="quiet-button" type="submit">保存登录</button></div></form>

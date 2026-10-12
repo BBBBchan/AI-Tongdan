@@ -26,6 +26,7 @@ from .audio import AudioPipeline
 from .bilibili import BilibiliClient
 from .config import ROOT, Settings
 from .danmaku_candidates import candidate_context, generate_candidates
+from .danmaku_auto import AutoDanmaku
 from .danmaku_send import DanmakuCredentials, DanmakuSender, DanmakuSendError
 from .events import EventBus
 from .journal import SessionJournal
@@ -58,6 +59,17 @@ class DanmakuRequest(BaseModel):
     text: str = Field(min_length=1, max_length=1000)
 
 
+class AutoDanmakuRequest(BaseModel):
+    session_id: str
+    interval_seconds: Literal[300] = 300
+    duration_seconds: Literal[1800] = 1800
+    max_messages: Literal[6] = 6
+
+
+class AutoDanmakuStopRequest(BaseModel):
+    session_id: str
+
+
 class Workspace:
     def __init__(self, settings):
         self.settings = settings
@@ -70,6 +82,7 @@ class Workspace:
         self.room = None
         self.playback = {"url": "", "embed_url": "", "type": "hls", "ready": False}
         self.danmaku = deque(maxlen=150)
+        self.sent_danmaku = deque(maxlen=30)
         self.tasks = []
         self.capture = None
         self.lock = asyncio.Lock()
@@ -82,6 +95,7 @@ class Workspace:
         self.last_danmaku_sent_at = None
         self.danmaku_send_error = None
         self.danmaku_candidates = {"items": [], "status": "waiting", "generated_at": None}
+        self.danmaku_auto = AutoDanmaku(self)
 
     def danmaku_send_status(self):
         status = self.danmaku_credentials.status()
@@ -135,6 +149,7 @@ class Workspace:
             "resume_error": self.resume_error,
             "danmaku_send": self.danmaku_send_status(),
             "danmaku_candidates": dict(self.danmaku_candidates),
+            "danmaku_auto": self.danmaku_auto.snapshot(),
         }
 
     def audio_snapshot(self):
@@ -174,6 +189,7 @@ class Workspace:
                 if saved["room"]["room_id"] != room.room_id:
                     raise ValueError("历史会话与直播间不一致")
             await self._stop()
+            self.danmaku_auto = AutoDanmaku(self)
             sid = resume_id or uuid.uuid4().hex
             directory = self.settings.data_dir / "sessions" / sid
             directory.mkdir(parents=True, exist_ok=bool(resume_id))
@@ -189,6 +205,7 @@ class Workspace:
                 self.session["resumed_at"] = time.time()
             self.resume_error = None
             self.danmaku.clear()
+            self.sent_danmaku.clear()
             self.danmaku_candidates = {"items": [], "status": "waiting", "generated_at": None}
             self.danmaku_send_error = None
             self.danmaku_status = {"status": "connecting"}
@@ -257,6 +274,7 @@ class Workspace:
         return self.snapshot()
 
     async def _stop(self):
+        await self.danmaku_auto.stop("直播会话已结束或服务正在重启")
         tasks, self.tasks = self.tasks, []
         for task in tasks:
             task.cancel()
@@ -276,6 +294,28 @@ class Workspace:
             self.session.update(status="stopped", stopped_at=time.time())
         self.playback["ready"] = False
         self.danmaku_status = {"status": "disconnected"}
+
+    async def _send_danmaku_locked(self, session_id, text, *, before_post=None):
+        """One send path for manual clicks and explicitly authorized trials."""
+        if not self.session or session_id != self.session["id"]:
+            raise DanmakuSendError("直播会话已变更，请检查房间后重新发送。", 409)
+        if self.session["status"] == "stopped" or not self.room or self.room.live_status != 1:
+            raise DanmakuSendError("请先连接正在直播的房间。", 409)
+        if self.last_danmaku_sent_at is not None and time.monotonic() - self.last_danmaku_sent_at < 3:
+            raise DanmakuSendError("发送过于频繁，请稍等几秒。", 429, "rate_limited")
+        try:
+            options = {"before_post": before_post} if before_post is not None else {}
+            result = await self.danmaku_sender.send(self.room.room_id, text, **options)
+        except DanmakuSendError as exc:
+            self.danmaku_send_error = str(exc)
+            await self.emit("danmaku_send_status", self.danmaku_send_status())
+            raise
+        self.last_danmaku_sent_at = time.monotonic()
+        self.sent_danmaku.append({"timestamp": self.last_danmaku_sent_at - self.clock_start,
+                                  "text": result.get("text", text).strip()})
+        self.danmaku_send_error = None
+        await self.emit("danmaku_send_status", self.danmaku_send_status())
+        return result
 
     async def ensure_model(self):
         """Pick up the first deployed endpoint without interrupting the session."""
@@ -326,7 +366,12 @@ class Workspace:
                     deferred_since = started
                 else:
                     deferred_since = None
-            context = candidate_context(self.snapshot(), source_time=time.monotonic() - self.clock_start)
+            evidence = self.snapshot()
+            # Reuse the agent's bounded, session-scoped audience record, which
+            # also restores with a resumed session. Do not enlarge UI snapshots.
+            evidence["danmaku_history"] = list(getattr(self.agent, "danmaku", evidence.get("danmaku", [])))
+            evidence["sent_danmaku"] = list(self.sent_danmaku)
+            context = candidate_context(evidence, source_time=time.monotonic() - self.clock_start)
             signature = json.dumps(context, ensure_ascii=False, sort_keys=True)
             if not self.room or self.room.live_status != 1 or not self.model or not self.model.configured or not any(
                     context.get(key) for key in ("visual", "audio_transcripts", "audience_comments")):
@@ -345,7 +390,9 @@ class Workspace:
                         return
                     self.danmaku_candidates = {"items": [{"id": uuid.uuid4().hex, "text": text}
                                                          for text in texts],
-                        "generated_at": time.time(), "source_time": context["source_time"],
+                        "generated_at": time.time(), "source_time": context["source_time"], "session_id": sid,
+                        "history_count": len(context.get("audience_history", [])),
+                        "recently_sent_count": len(context.get("recently_sent", [])),
                         "sources": [key for key in ("visual", "audio_transcripts", "audience_comments")
                                     if context[key]], "status": "ready", "error": None}
                     previous = signature
@@ -563,6 +610,7 @@ def create_app(settings=None):
             except (ValueError, DanmakuSendError) as exc:
                 # Credential validation messages are intentionally fixed.
                 raise HTTPException(400, "登录信息无效，请检查本人 Cookie 中的 SESSDATA 和 bili_jct。") from exc
+            await workspace.danmaku_auto.stop("弹幕登录配置已更改")
             workspace.danmaku_send_error = None
             status = workspace.danmaku_send_status()
             await workspace.emit("danmaku_send_status", status)
@@ -571,22 +619,30 @@ def create_app(settings=None):
     @app.post("/api/danmaku/send")
     async def send_danmaku(payload: DanmakuRequest):
         async with workspace.lock:
-            if not workspace.session or payload.session_id != workspace.session["id"]:
-                raise HTTPException(409, "直播会话已变更，请检查房间后重新发送。")
-            if workspace.session["status"] == "stopped" or not workspace.room or workspace.room.live_status != 1:
-                raise HTTPException(409, "请先连接正在直播的房间。")
-            if workspace.last_danmaku_sent_at is not None and time.monotonic() - workspace.last_danmaku_sent_at < 3:
-                raise HTTPException(429, "发送过于频繁，请稍等几秒。")
             try:
-                result = await workspace.danmaku_sender.send(workspace.room.room_id, payload.text)
+                return await workspace._send_danmaku_locked(payload.session_id, payload.text)
             except DanmakuSendError as exc:
-                workspace.danmaku_send_error = str(exc)
-                await workspace.emit("danmaku_send_status", workspace.danmaku_send_status())
                 raise HTTPException(exc.status_code, str(exc)) from None
-            workspace.last_danmaku_sent_at = time.monotonic()
-            workspace.danmaku_send_error = None
-            await workspace.emit("danmaku_send_status", workspace.danmaku_send_status())
-            return result
+
+    @app.post("/api/danmaku/auto/start")
+    async def start_auto_danmaku(payload: AutoDanmakuRequest):
+        async with workspace.lock:
+            try:
+                return await workspace.danmaku_auto.start(payload.session_id, payload.interval_seconds,
+                                                          payload.duration_seconds, payload.max_messages)
+            except DanmakuSendError as exc:
+                raise HTTPException(exc.status_code, str(exc)) from None
+
+    @app.post("/api/danmaku/auto/stop")
+    async def stop_auto_danmaku(payload: AutoDanmakuStopRequest):
+        # Signal before acquiring the lock: an in-progress room lookup must
+        # not start a POST after the user has already pressed Stop.
+        if workspace.session and payload.session_id == workspace.session["id"]:
+            workspace.danmaku_auto.stop_requested = True
+        async with workspace.lock:
+            if not workspace.session or payload.session_id != workspace.session["id"]:
+                raise HTTPException(409, "直播会话已变更，请刷新当前房间。")
+            return await workspace.danmaku_auto.stop()
 
     @app.post("/api/questions", status_code=202)
     async def question(payload: QuestionRequest):

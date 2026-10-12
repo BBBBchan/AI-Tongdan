@@ -1,11 +1,15 @@
 import asyncio
+from contextlib import suppress
 from dataclasses import replace
 import json
 from pathlib import Path
+import time
+from types import SimpleNamespace
 
 import httpx
 import pytest
 
+import app.server as server_module
 from app.bilibili import RoomInfo
 from app.config import Settings
 from app.events import EventBus
@@ -75,17 +79,142 @@ async def test_danmaku_credentials_private_and_send_bound_to_active_room(tmp_pat
             response = await client.post("/api/danmaku/send", json={"session_id": sid, "text": "测试草稿"})
             assert response.status_code == 200 and response.json()["sent"]
             assert calls == [(80397, "测试草稿")]
+            successful = list(workspace.sent_danmaku)
+            assert len(successful) == 1 and successful[0]["text"] == "测试草稿"
+            assert successful[0]["timestamp"] >= 0
             duplicate = await client.post("/api/danmaku/send", json={"session_id": sid, "text": "测试草稿"})
             assert duplicate.status_code == 429 and len(calls) == 1
+            assert list(workspace.sent_danmaku) == successful
             workspace.last_danmaku_sent_at = None
             async def rejected(*_):
                 raise DanmakuSendError("请更新本人登录状态。", 401, "login_required")
             workspace.danmaku_sender.send = rejected
             expired = await client.post("/api/danmaku/send", json={"session_id": sid, "text": "测试草稿"})
             assert expired.status_code == 401 and workspace.danmaku_send_error
+            assert list(workspace.sent_danmaku) == successful
             removed = await client.post("/api/danmaku/credentials", json={"cookie": ""})
             assert not removed.json()["configured"]
             assert not workspace.danmaku_credentials.path.exists()
+            async def other_room(_):
+                return RoomInfo(room_id=732, short_id=0, title="另一个房间", owner_uid=2,
+                                live_status=0, cover="")
+            workspace.client.resolve_room = other_room
+            workspace.danmaku_auto.data.update(status="stopped", session_id=sid, last_text="上一房间的话")
+            changed = await client.post("/api/session", json={"room": "732"})
+            assert changed.status_code == 200 and changed.json()["room"]["room_id"] == 732
+            assert changed.json()["session"]["id"] != sid
+            assert not workspace.sent_danmaku
+            assert changed.json()["danmaku_auto"]["status"] == "idle"
+            assert changed.json()["danmaku_auto"]["last_text"] is None
+
+
+@pytest.mark.asyncio
+async def test_auto_danmaku_routes_are_opt_in_bounded_and_session_scoped(tmp_path, clean_model_env, monkeypatch):
+    app = create_app(Settings(tmp_path, "ffmpeg"))
+    workspace = app.state.workspace
+    await workspace.client.aclose()
+    workspace.client = FakeBilibili()
+    entered = asyncio.Event()
+
+    async def parked_run():
+        entered.set()
+        await asyncio.Event().wait()
+
+    async def never_send(*args, **kwargs):
+        pytest.fail("Route integration tests must never invoke the send API")
+
+    monkeypatch.setattr(workspace.danmaku_sender, "send", never_send)
+    async with app.router.lifespan_context(app):
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://local") as client:
+            initial = (await client.get("/api/state")).json()["danmaku_auto"]
+            assert initial["status"] == "idle" and workspace.danmaku_auto.task is None
+            await workspace.start("510")
+            monkeypatch.setattr(workspace.danmaku_auto, "run", parked_run)
+            await asyncio.sleep(.02)
+            sid = workspace.session["id"]
+            workspace.room = replace(workspace.room, live_status=1)
+            workspace.session["status"] = "live"
+            await client.post("/api/danmaku/credentials", json={
+                "cookie": "SESSDATA=integration-session; bili_jct=integration-csrf"})
+            wrong = await client.post("/api/danmaku/auto/start", json={"session_id": "old"})
+            assert wrong.status_code == 409
+            for invalid in ({"interval_seconds": 299}, {"duration_seconds": 1801}, {"max_messages": 7}):
+                response = await client.post("/api/danmaku/auto/start", json={"session_id": sid, **invalid})
+                assert response.status_code == 422
+            assert workspace.danmaku_auto.task is None and not entered.is_set()
+            started = await client.post("/api/danmaku/auto/start", json={
+                "session_id": sid, "interval_seconds": 300, "duration_seconds": 1800, "max_messages": 6})
+            assert started.status_code == 200
+            payload = started.json()
+            assert payload["status"] == "active" and payload["session_id"] == sid
+            assert payload["room_id"] == workspace.room.room_id
+            assert payload["sent_count"] == 0 and payload["max_messages"] == 6
+            assert payload["interval_seconds"] == 300 and payload["ends_at"] - payload["started_at"] == 1800
+            await asyncio.wait_for(entered.wait(), 1)
+            runner = workspace.danmaku_auto.task
+            assert not runner.done()
+            repeated = await client.post("/api/danmaku/auto/start", json={"session_id": sid})
+            assert repeated.json()["started_at"] == payload["started_at"]
+            assert workspace.danmaku_auto.task is runner
+            wrong_stop = await client.post("/api/danmaku/auto/stop", json={"session_id": "old"})
+            assert wrong_stop.status_code == 409 and not workspace.danmaku_auto.stop_requested
+            stopped = await client.post("/api/danmaku/auto/stop", json={"session_id": sid})
+            assert stopped.status_code == 200 and stopped.json()["status"] == "stopped"
+            assert stopped.json()["session_id"] == sid and stopped.json()["sent_count"] == 0
+            assert runner.cancelled() and workspace.danmaku_auto.task is None
+            assert not workspace.sent_danmaku
+
+
+@pytest.mark.asyncio
+async def test_candidate_loop_injects_agent_history_and_successful_sends(tmp_path, clean_model_env, monkeypatch):
+    app = create_app(Settings(tmp_path, "ffmpeg", adaptive_observation=False))
+    workspace = app.state.workspace
+    await workspace.client.aclose()
+    workspace.client = FakeBilibili()
+    workspace.session = {"id": "history-session", "status": "live"}
+    workspace.room = RoomInfo(room_id=732, short_id=0, title="测试房间", owner_uid=1, live_status=1, cover="")
+    workspace.clock_start = time.monotonic() - 600
+    workspace.model = SimpleNamespace(configured=True)
+    workspace.agent = SimpleNamespace(danmaku=[
+        {"timestamp": 320, "text": "五分钟前的话题"}, {"timestamp": 450, "text": "继续聊刚才的梗"}],
+        snapshot=lambda: {"observer": {"last_timestamp": 599}, "observations": []})
+    workspace.danmaku.append({"timestamp": 599, "text": "刚刚这个动作"})
+    workspace.sent_danmaku.append({"timestamp": 590, "text": "本人已经发送过的反应"})
+    contexts = []
+    ready = asyncio.Event()
+    emit = workspace.emit
+
+    async def generate(model, context, **kwargs):
+        contexts.append(context)
+        return ["一条新的候选"]
+
+    async def capture_event(kind, data):
+        await emit(kind, data)
+        if kind == "danmaku_candidates" and data["status"] == "ready":
+            ready.set()
+
+    async def never_send(*args, **kwargs):
+        pytest.fail("Candidate generation must never send a message")
+
+    monkeypatch.setattr(server_module, "generate_candidates", generate)
+    monkeypatch.setattr(workspace, "emit", capture_event)
+    monkeypatch.setattr(workspace.danmaku_sender, "send", never_send)
+    task = asyncio.create_task(workspace._candidate_loop(workspace.session["id"]))
+    try:
+        await asyncio.wait_for(ready.wait(), 1)
+        assert len(contexts) == 1
+        assert [item["text"] for item in contexts[0]["audience_comments"]] == ["刚刚这个动作"]
+        assert [item["text"] for item in contexts[0]["audience_history"]] == ["五分钟前的话题", "继续聊刚才的梗"]
+        assert [item["text"] for item in contexts[0]["recently_sent"]] == ["本人已经发送过的反应"]
+        assert workspace.danmaku_candidates["history_count"] == 2
+        assert workspace.danmaku_candidates["recently_sent_count"] == 1
+        assert workspace.danmaku_candidates["sources"] == ["audience_comments"]
+    finally:
+        task.cancel()
+        with suppress(asyncio.CancelledError):
+            await task
+        await workspace.client.aclose()
+        await workspace.danmaku_sender.close()
 
 
 @pytest.mark.asyncio

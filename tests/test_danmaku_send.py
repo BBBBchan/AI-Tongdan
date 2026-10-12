@@ -172,3 +172,49 @@ async def test_redirect_does_not_forward_authenticated_request(tmp_path):
         with pytest.raises(DanmakuSendError):
             await DanmakuSender(DanmakuCredentials(tmp_path, COOKIE), client).send(732, "你好")
     assert len(calls) == 1 and calls[0].url.host == "api.bilibili.com"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("code", ["trial_stopped", "trial_expired"])
+async def test_trial_guard_can_abort_after_login_get_without_posting(tmp_path, code):
+    calls = []
+    stopped_or_expired = False
+
+    def handle(request):
+        nonlocal stopped_or_expired
+        calls.append(request.method)
+        assert request.method == "GET", "A revoked trial must never reach POST"
+        # State can change while the login request is in flight.
+        stopped_or_expired = True
+        return httpx.Response(200, json=NAV)
+
+    def before_post():
+        calls.append("guard")
+        assert stopped_or_expired, "The guard must run after the login GET"
+        raise DanmakuSendError("本轮试运行已停止", 409, code)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handle)) as client:
+        sender = DanmakuSender(DanmakuCredentials(tmp_path, COOKIE), client)
+        with pytest.raises(DanmakuSendError) as error:
+            await sender.send(732, "你好", before_post=before_post)
+        assert not sender._send_lock.locked()
+    assert calls == ["GET", "guard"]
+    assert error.value.code == code and error.value.status_code == 409
+
+
+@pytest.mark.asyncio
+async def test_valid_trial_guard_runs_once_between_get_and_post(tmp_path):
+    calls = []
+
+    def handle(request):
+        calls.append(request.method)
+        return httpx.Response(200, json=NAV if request.method == "GET" else {"code": 0})
+
+    def before_post():
+        calls.append("guard")
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handle)) as client:
+        sender = DanmakuSender(DanmakuCredentials(tmp_path, COOKIE), client)
+        result = await sender.send(732, "你好", before_post=before_post)
+    assert result["sent"] is True
+    assert calls == ["GET", "guard", "POST"]

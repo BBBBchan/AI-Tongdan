@@ -7,9 +7,11 @@ from io import BytesIO
 import base64
 import json
 import math
+import os
 from pathlib import Path
 import re
 import shutil
+import tempfile
 import time
 from typing import Literal
 from urllib.parse import urlparse
@@ -172,6 +174,7 @@ class Workspace:
             "audio": self.audio_snapshot(),
             "resume_error": self.resume_error,
             "danmaku_send": self.danmaku_send_status(),
+            "sent_danmaku": [dict(item) for item in self.sent_danmaku],
             "danmaku_candidates": dict(self.danmaku_candidates),
             "danmaku_style": dict(self.danmaku_style),
             "danmaku_corpus": self.corpus_status(),
@@ -232,6 +235,8 @@ class Workspace:
             self.resume_error = None
             self.danmaku.clear()
             self.sent_danmaku.clear()
+            if saved:
+                self._restore_sent_danmaku(directory)
             self.danmaku_candidates = {"items": [], "status": "waiting", "generated_at": None}
             self.danmaku_send_error = None
             self.danmaku_status = {"status": "connecting"}
@@ -321,8 +326,69 @@ class Workspace:
         self.playback["ready"] = False
         self.danmaku_status = {"status": "disconnected"}
 
-    async def _send_danmaku_locked(self, session_id, text, *, before_post=None):
+    def _persist_sent_danmaku(self):
+        directory = self.settings.data_dir / "sessions" / self.session["id"]
+        directory.mkdir(parents=True, exist_ok=True)
+        descriptor, temporary = tempfile.mkstemp(prefix=".sent-danmaku-", dir=directory)
+        try:
+            with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+                os.fchmod(handle.fileno(), 0o600)
+                json.dump({"session_id": self.session["id"], "room_id": self.room.room_id,
+                           "items": list(self.sent_danmaku)}, handle, ensure_ascii=False)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(temporary, directory / "sent_danmaku.private.json")
+        finally:
+            with suppress(OSError):
+                os.unlink(temporary)
+
+    def _restore_sent_danmaku(self, directory):
+        """Only confirmed sends from this session/room become public history."""
+        items = []
+        migrated = False
+        for name, legacy in (("sent_danmaku.private.json", False), ("danmaku_auto.private.json", True)):
+            try:
+                with (directory / name).open(encoding="utf-8") as handle:
+                    saved = json.loads(handle.read(32769))
+                if (not isinstance(saved, dict) or saved.get("session_id") != self.session["id"]
+                        or saved.get("room_id") != self.room.room_id):
+                    continue
+                records = saved.get("history" if legacy else "items", [])
+                if not isinstance(records, list):
+                    continue
+                for item in records[-30:]:
+                    if not isinstance(item, dict) or (legacy and item.get("status") != "accepted"):
+                        continue
+                    text, sent_at = item.get("text"), item.get("sent_at")
+                    source = "auto" if legacy else item.get("source")
+                    if (not isinstance(text, str) or not text.strip() or len(text) > 1000
+                            or type(sent_at) not in (int, float) or not math.isfinite(sent_at)
+                            or sent_at < self.session["started_at"] or source not in {"manual", "auto"}):
+                        continue
+                    timestamp = sent_at - self.session["started_at"] if legacy else item.get("timestamp")
+                    if type(timestamp) not in (int, float) or not math.isfinite(timestamp) or timestamp < 0:
+                        continue
+                    # The trial writes its own success time just after the
+                    # shared send path. Do not display that acknowledgement twice.
+                    if legacy and any(entry["source"] == "auto" and entry["text"] == text.strip()
+                                      and abs(entry["sent_at"] - sent_at) < 3 for entry in items):
+                        continue
+                    items.append({"text": text.strip(), "timestamp": timestamp,
+                                  "sent_at": sent_at, "source": source})
+                    migrated = migrated or legacy
+            except (OSError, ValueError, TypeError, UnicodeError):
+                continue
+        self.sent_danmaku.extend(sorted(items, key=lambda item: item["sent_at"])[-30:])
+        if migrated:
+            # Starting another trial replaces its legacy file, so migrate now
+            # even if no new message is sent before the next server restart.
+            with suppress(OSError):
+                self._persist_sent_danmaku()
+
+    async def _send_danmaku_locked(self, session_id, text, *, before_post=None, source="manual"):
         """One send path for manual clicks and explicitly authorized trials."""
+        if source not in {"manual", "auto"}:
+            raise ValueError("Unknown danmaku source")
         if not self.session or session_id != self.session["id"]:
             raise DanmakuSendError("直播会话已变更，请检查房间后重新发送。", 409)
         if self.session["status"] == "stopped" or not self.room or self.room.live_status != 1:
@@ -338,8 +404,16 @@ class Workspace:
             raise
         self.last_danmaku_sent_at = time.monotonic()
         self.sent_danmaku.append({"timestamp": self.last_danmaku_sent_at - self.clock_start,
-                                  "text": result.get("text", text).strip()})
+                                  "text": result.get("text", text).strip(),
+                                  "sent_at": time.time(), "source": source})
         self.danmaku_send_error = None
+        try:
+            self._persist_sent_danmaku()
+        except OSError:
+            # Delivery already succeeded. Never turn a local write error into
+            # a failed send response that could encourage a duplicate retry.
+            await self.emit("error", {"source": "storage", "message": "弹幕已发送，但记录保存失败；重启后可能无法恢复。"})
+        await self.emit("sent_danmaku", {"items": [dict(item) for item in self.sent_danmaku]})
         await self.emit("danmaku_send_status", self.danmaku_send_status())
         return result
 

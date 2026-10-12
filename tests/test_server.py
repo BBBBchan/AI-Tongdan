@@ -82,6 +82,16 @@ async def test_danmaku_credentials_private_and_send_bound_to_active_room(tmp_pat
             successful = list(workspace.sent_danmaku)
             assert len(successful) == 1 and successful[0]["text"] == "测试草稿"
             assert successful[0]["timestamp"] >= 0
+            assert successful[0]["source"] == "manual" and successful[0]["sent_at"] > 0
+            assert (await client.get("/api/state")).json()["sent_danmaku"] == successful
+            sent_events = [event for event in workspace.bus.history if event["type"] == "sent_danmaku"]
+            assert len(sent_events) == 1 and sent_events[0]["session_id"] == sid
+            assert sent_events[0]["data"] == {"items": successful}
+            history_path = tmp_path / "sessions" / sid / "sent_danmaku.private.json"
+            assert history_path.stat().st_mode & 0o777 == 0o600
+            saved_history = json.loads(history_path.read_text())
+            assert saved_history == {"session_id": sid, "room_id": 80397, "items": successful}
+            assert secret not in history_path.read_text()
             duplicate = await client.post("/api/danmaku/send", json={"session_id": sid, "text": "测试草稿"})
             assert duplicate.status_code == 429 and len(calls) == 1
             assert list(workspace.sent_danmaku) == successful
@@ -92,6 +102,8 @@ async def test_danmaku_credentials_private_and_send_bound_to_active_room(tmp_pat
             expired = await client.post("/api/danmaku/send", json={"session_id": sid, "text": "测试草稿"})
             assert expired.status_code == 401 and workspace.danmaku_send_error
             assert list(workspace.sent_danmaku) == successful
+            assert [event for event in workspace.bus.history if event["type"] == "sent_danmaku"] == sent_events
+            assert json.loads(history_path.read_text()) == saved_history
             removed = await client.post("/api/danmaku/credentials", json={"cookie": ""})
             assert not removed.json()["configured"]
             assert not workspace.danmaku_credentials.path.exists()
@@ -104,8 +116,37 @@ async def test_danmaku_credentials_private_and_send_bound_to_active_room(tmp_pat
             assert changed.status_code == 200 and changed.json()["room"]["room_id"] == 732
             assert changed.json()["session"]["id"] != sid
             assert not workspace.sent_danmaku
+            assert changed.json()["sent_danmaku"] == []
             assert changed.json()["danmaku_auto"]["status"] == "idle"
             assert changed.json()["danmaku_auto"]["last_text"] is None
+
+
+@pytest.mark.asyncio
+async def test_confirmed_send_remains_successful_if_history_disk_write_fails(tmp_path, clean_model_env, monkeypatch):
+    app = create_app(Settings(tmp_path, "ffmpeg"))
+    workspace = app.state.workspace
+    await workspace.client.aclose()
+    workspace.client = FakeBilibili()
+
+    async def confirmed(*args, **kwargs):
+        return {"sent": True, "text": "保存失败也不重复发"}
+
+    def unavailable():
+        raise OSError("disk unavailable")
+
+    monkeypatch.setattr(workspace.danmaku_sender, "send", confirmed)
+    monkeypatch.setattr(workspace, "_persist_sent_danmaku", unavailable)
+    async with app.router.lifespan_context(app):
+        await workspace.start("510")
+        workspace.room = replace(workspace.room, live_status=1)
+        async with workspace.lock:
+            result = await workspace._send_danmaku_locked(workspace.session["id"], "保存失败也不重复发", source="auto")
+        assert result["sent"] is True
+        assert workspace.snapshot()["sent_danmaku"][0]["source"] == "auto"
+        assert workspace.snapshot()["sent_danmaku"][0]["text"] == "保存失败也不重复发"
+        assert any(event["type"] == "error" and event["data"]["source"] == "storage"
+                   for event in workspace.bus.history)
+        assert any(event["type"] == "sent_danmaku" for event in workspace.bus.history)
 
 
 @pytest.mark.asyncio

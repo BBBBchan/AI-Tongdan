@@ -8,9 +8,9 @@
   <title>AI同担—你的AI直播同担</title>
   <link rel="icon" type="image/png" href="/static/brand/ai-tongdan-logo.png">
   <link rel="apple-touch-icon" href="/static/brand/ai-tongdan-logo.png">
-  <link rel="stylesheet" href="/static/app.css?v=local-corpus-1">
+  <link rel="stylesheet" href="/static/app.css?v=sent-danmaku-1">
   <script defer src="/static/vendor/hls.min.js"></script>
-  <script defer src="/static/app.js?v=local-corpus-1"></script>
+  <script defer src="/static/app.js?v=sent-danmaku-1"></script>
 </head>
 <body>
   <header class="topbar">
@@ -71,6 +71,11 @@
             <p id="danmaku-send-feedback" class="danmaku-send-feedback" role="status" hidden></p>
             <div id="danmaku-copy-fallback" hidden><label for="danmaku-copy-text">浏览器未允许复制，请复制下方已选中的文本：</label><textarea id="danmaku-copy-text" rows="2" readonly></textarea></div>
             <form id="danmaku-login-form" class="danmaku-login-form" hidden><label for="danmaku-cookie">本人 Bilibili 登录 Cookie</label><textarea id="danmaku-cookie" rows="2" autocomplete="off" spellcheck="false" placeholder="粘贴本人的登录 Cookie，仅保存在本机"></textarea><div><span>用于你本人账号发送；保存后会清空此输入。</span><button id="danmaku-login-save" class="quiet-button" type="submit">保存登录</button></div></form>
+            <section class="danmaku-sent" aria-labelledby="danmaku-sent-heading">
+              <div class="danmaku-sent-heading"><h3 id="danmaku-sent-heading">已发送弹幕 <span id="danmaku-sent-count" class="count-badge">0</span></h3><span>本次会话最近 30 条 · 最新在前</span></div>
+              <p id="danmaku-sent-empty" class="danmaku-sent-empty">还没发言？你的每一次接梗，都会留在这里。</p>
+              <ol id="danmaku-sent-list" class="danmaku-sent-list" aria-label="已成功发送的弹幕" hidden></ol>
+            </section>
           </div>
         </section>
         <div class="watch-footnote"><span class="status-dot" id="events-dot"></span><span id="events-status">正在连接工作台</span><span class="footnote-right">持续观察 · 结构化记忆 · 多轮问答</span></div>

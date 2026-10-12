@@ -213,7 +213,7 @@ class AutoDanmaku:
                 raise DanmakuSendError("候选依据已过期，未发送。", 409, "trial_stale")
 
         try:
-            await ws._send_danmaku_locked(self.data["session_id"], text, before_post=before_post)
+            await ws._send_danmaku_locked(self.data["session_id"], text, before_post=before_post, source="auto")
         except DanmakuSendError as exc:
             if exc.code in {"trial_stopped", "trial_expired", "trial_stale"}:
                 entry.update(status="not_sent", code=exc.code)

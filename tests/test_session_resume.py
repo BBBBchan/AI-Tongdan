@@ -1,4 +1,5 @@
 from io import BytesIO
+from dataclasses import replace
 import json
 import wave
 
@@ -112,3 +113,65 @@ async def test_invalid_saved_session_does_not_prevent_app_start(tmp_path, monkey
     async with app.router.lifespan_context(app):
         assert app.state.workspace.session is None
         assert app.state.workspace.snapshot()["resume_error"]
+
+
+@pytest.mark.asyncio
+async def test_sent_danmaku_survives_restart_and_migrates_only_accepted_trial_records(tmp_path, monkeypatch):
+    app = await application(tmp_path, monkeypatch)
+
+    async def confirmed(room, text, **kwargs):
+        return {"sent": True, "text": text}
+
+    async with app.router.lifespan_context(app):
+        workspace = app.state.workspace
+        await workspace.start("23029447")
+        sid = workspace.session["id"]
+        workspace.room = replace(workspace.room, live_status=1)
+        monkeypatch.setattr(workspace.danmaku_sender, "send", confirmed)
+        async with workspace.lock:
+            await workspace._send_danmaku_locked(sid, "手动发送测试")
+            workspace.last_danmaku_sent_at = None
+            await workspace._send_danmaku_locked(sid, "自动发送测试", source="auto")
+        before = workspace.snapshot()["sent_danmaku"]
+        directory = tmp_path / "sessions" / sid
+        # Legacy trial history can also contain pending or uncertain deliveries.
+        (directory / "danmaku_auto.private.json").write_text(json.dumps({
+            "session_id": sid, "room_id": workspace.room.room_id, "status": "active", "history": [
+                {"text": "自动发送测试", "status": "accepted", "sent_at": before[-1]["sent_at"] + .01},
+                {"text": "迁移旧记录", "status": "accepted", "sent_at": before[-1]["sent_at"] + .02},
+                *[{"text": "不要误记", "status": status, "sent_at": before[-1]["sent_at"]}
+                  for status in ("pending", "unknown", "failed", "not_sent")],
+            ]}))
+    app = await application(tmp_path, monkeypatch)
+    async with app.router.lifespan_context(app):
+        workspace = app.state.workspace
+        restored = workspace.snapshot()["sent_danmaku"]
+        assert restored[:2] == before
+        assert [item["text"] for item in restored] == ["手动发送测试", "自动发送测试", "迁移旧记录"]
+        assert restored[-1]["source"] == "auto" and restored[-1]["timestamp"] >= 0
+        assert json.loads((directory / "sent_danmaku.private.json").read_text())["items"] == restored
+        assert workspace.danmaku_auto.snapshot()["status"] == "idle"
+        assert workspace.danmaku_auto.task is None
+        await workspace.start("23029447")
+        assert workspace.session["id"] != sid
+        assert workspace.snapshot()["sent_danmaku"] == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mismatch", ["session_id", "room_id"])
+async def test_sent_history_ignores_records_from_another_session_or_room(tmp_path, monkeypatch, mismatch):
+    app = await application(tmp_path, monkeypatch)
+    async with app.router.lifespan_context(app):
+        workspace = app.state.workspace
+        await workspace.start("23029447")
+        sid, started = workspace.session["id"], workspace.session["started_at"]
+        wrong = {"session_id": sid, "room_id": workspace.room.room_id}
+        wrong[mismatch] = "other-session" if mismatch == "session_id" else 732
+        directory = tmp_path / "sessions" / sid
+        (directory / "sent_danmaku.private.json").write_text(json.dumps({**wrong, "items": [
+            {"text": "其他房间手动记录", "source": "manual", "timestamp": 0, "sent_at": started}]}))
+        (directory / "danmaku_auto.private.json").write_text(json.dumps({**wrong, "history": [
+            {"text": "其他房间自动记录", "status": "accepted", "sent_at": started}]}))
+    app = await application(tmp_path, monkeypatch)
+    async with app.router.lifespan_context(app):
+        assert app.state.workspace.snapshot()["sent_danmaku"] == []

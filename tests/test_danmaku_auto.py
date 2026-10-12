@@ -63,9 +63,10 @@ class Workspace:
             raise self.resolve_error
         return self.resolved_room
 
-    async def _send_danmaku_locked(self, sid, text, *, before_post=None):
+    async def _send_danmaku_locked(self, sid, text, *, before_post=None, source="manual"):
         assert self.lock.locked(), "External sends must share the room-switch lock"
         assert sid == self.session["id"]
+        assert source == "auto"
         self.clock.advance(self.send_delay)
         if before_post is not None:
             before_post()
@@ -123,7 +124,8 @@ async def test_rechecks_trial_at_post_boundary_after_authentication(trial, chang
         clock.advance(1799)
         ws.seed()
 
-    async def authentication_then_guard(sid, text, *, before_post):
+    async def authentication_then_guard(sid, text, *, before_post, source):
+        assert source == "auto"
         if change == "stop":
             auto.stop_requested = True
         elif change == "style":

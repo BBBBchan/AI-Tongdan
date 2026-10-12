@@ -41,6 +41,9 @@ class Workspace:
         self.agent = SimpleNamespace(_observer_snapshot=lambda: {"understanding_age_seconds": self.age})
         self.danmaku = []
         self.danmaku_candidates = {}
+        self.danmaku_chorus = {}
+        self.sent_danmaku = []
+        self.clock_start = clock.monotonic()
         self.danmaku_style = {"value": 30, "revision": 0}
         self.pending_danmaku_style_updates = 0
         self.last_danmaku_sent_at = None
@@ -82,6 +85,18 @@ class Workspace:
             "sources": {"visual": True}, "status": "ready", "items": [{"text": text}],
             **overrides,
         }
+
+    def seed_chorus(self, text="好好好", *, age=0, users=None, append=False):
+        stamp = self.clock.monotonic() - self.clock_start - age
+        records = [{"text": text, "timestamp": stamp, "room_id": self.room.room_id,
+                    "user_id": user, "message_id": f"{text}-{index}-{stamp}"}
+                   for index, user in enumerate(users if users is not None else [1, 2, 3, 4])]
+        if not append:
+            self.danmaku = []
+            self.danmaku_chorus = {"session_id": self.session["id"], "items": []}
+        self.danmaku.extend(records)
+        self.danmaku_chorus["items"].append({"id": text, "kind": "chorus", "text": text,
+                                             "source_time": stamp, "updated_at": self.clock.time()})
 
 
 @pytest_asyncio.fixture
@@ -699,3 +714,202 @@ async def test_concurrent_room_switch_wins_lock_and_prevents_queued_send(trial):
         ws.room = SimpleNamespace(room_id=456, live_status=1)
     await asyncio.wait_for(queued_tick, timeout=1)
     assert auto.data["status"] == "stopped" and ws.attempts == []
+
+
+@pytest.mark.asyncio
+async def test_chorus_can_send_without_ai_or_fresh_understanding(trial):
+    auto, ws, clock = trial
+    ws.seed_chorus()
+    await auto.start(ws.session["id"])
+    ws.agent = None
+    ws.pending_danmaku_style_updates = 1
+    assert ws.danmaku_candidates == {}
+    await tick(auto)
+    assert [item["text"] for item in ws.attempts] == ["好好好"]
+    assert auto.data["sent_count"] == 1
+    assert auto.data["history"][-1]["candidate_source"] == "chorus"
+    assert auto.next_due == clock.monotonic() + 300
+
+
+@pytest.mark.asyncio
+async def test_five_ai_choices_and_three_choruses_share_one_uniform_pool(trial, monkeypatch):
+    auto, ws, _ = trial
+    await auto.start(ws.session["id"])
+    ws.seed()
+    ai_texts = [f"AI候选{index}" for index in range(5)]
+    ws.danmaku_candidates["items"] = [{"text": text} for text in ai_texts]
+    ws.seed_chorus("好好好")
+    ws.seed_chorus("666", append=True)
+    ws.seed_chorus("这也行", append=True)
+    pools = []
+
+    def choose(values):
+        pools.append(values)
+        return values[-1]
+
+    monkeypatch.setattr(auto_module.random, "choice", choose)
+    assert auto.choose() in {"好好好", "666", "这也行"}
+    assert len(pools) == 1 and len(pools[0]) == 8
+    assert {item["text"] for item in pools[0]} == set(ai_texts) | {"好好好", "666", "这也行"}
+    assert sum(item["kind"] == "ai" for item in pools[0]) == 5
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("invalid", ["stale", "future", "old-session", "old-room", "single-user",
+                                     "duplicate-message", "not-displayed", "sent-this-run"])
+async def test_chorus_needs_fresh_current_room_distinct_audience_evidence(trial, invalid):
+    auto, ws, clock = trial
+    await auto.start(ws.session["id"])
+    clock.advance(40)
+    ws.seed_chorus(age=31 if invalid == "stale" else -1 if invalid == "future" else 0,
+                   users=[1, 1, 1, 1] if invalid == "single-user" else None)
+    if invalid == "old-session":
+        ws.danmaku_chorus["session_id"] = "old-session"
+    elif invalid == "old-room":
+        for item in ws.danmaku:
+            item["room_id"] = 456
+    elif invalid == "duplicate-message":
+        for item in ws.danmaku:
+            item["message_id"] = "one-message-replayed"
+    elif invalid == "not-displayed":
+        ws.danmaku_chorus["items"] = []
+    elif invalid == "sent-this-run":
+        auto.sent_texts.add("好好好")
+    await tick(auto)
+    assert ws.attempts == [] and ws.resolve_calls == []
+    assert auto.data["skipped_count"] == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("source", ["ai", "chorus"])
+@pytest.mark.parametrize("clock_field", ["sent_at", "timestamp"])
+async def test_recent_manual_success_is_excluded_from_all_auto_sources(trial, source, clock_field):
+    auto, ws, clock = trial
+    await auto.start(ws.session["id"])
+    clock.advance(40)
+    text = "刚刚已经发过"
+    ws.seed(text) if source == "ai" else ws.seed_chorus(text)
+    stamp = clock.time() if clock_field == "sent_at" else clock.monotonic() - ws.clock_start
+    ws.sent_danmaku = [{"text": f" {text} ", clock_field: stamp, "source": "manual", "status": "accepted"}]
+    await tick(auto)
+    assert ws.attempts == [] and auto.data["skipped_count"] == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("sent_age,status", [(1801, "accepted"), (0, "failed"), (0, "not_sent")])
+async def test_old_or_unsent_history_does_not_block_a_current_chorus(trial, sent_age, status):
+    auto, ws, clock = trial
+    await auto.start(ws.session["id"])
+    ws.seed_chorus()
+    ws.sent_danmaku = [{"text": "好好好", "sent_at": clock.time() - sent_age, "status": status}]
+    await tick(auto)
+    assert [item["text"] for item in ws.attempts] == ["好好好"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stage", ["room_lookup", "authentication"])
+async def test_exact_chorus_expires_even_if_another_phrase_stays_fresh(trial, monkeypatch, stage):
+    auto, ws, clock = trial
+    await auto.start(ws.session["id"])
+    clock.advance(40)
+    ws.seed_chorus("快要过期", age=25)
+    ws.seed_chorus("还很新鲜", append=True)
+    selections = []
+
+    def choose(values):
+        selections.append(values)
+        return next(item for item in values if item["text"] == "快要过期")
+
+    monkeypatch.setattr(auto_module.random, "choice", choose)
+    if stage == "room_lookup":
+        ws.resolve_delay = 6
+    else:
+        ws.send_delay = 6
+    await tick(auto)
+    assert ws.attempts == [] and auto.data["sent_count"] == 0
+    assert auto.data["skipped_count"] == 1 and len(selections) == 1
+    assert [item["text"] for item in auto._choices()] == ["还很新鲜"]
+    if stage == "authentication":
+        assert auto.data["history"][-1]["code"] == "trial_stale"
+    else:
+        assert auto.data["history"] == []
+
+
+@pytest.mark.asyncio
+async def test_ai_exact_selected_card_cannot_be_replaced_by_another_at_post_boundary(trial):
+    auto, ws, clock = trial
+    await auto.start(ws.session["id"])
+    ws.seed("本次已选定")
+
+    async def authentication_then_guard(sid, text, *, before_post, source):
+        assert text == "本次已选定"
+        clock.advance(1)
+        ws.seed("另一条依然新鲜")
+        before_post()
+        pytest.fail("A different fresh candidate cannot validate the selected text")
+
+    ws._send_danmaku_locked = authentication_then_guard
+    await tick(auto)
+    assert ws.attempts == [] and auto.data["history"][-1]["code"] == "trial_stale"
+
+
+@pytest.mark.asyncio
+async def test_chorus_remains_valid_across_style_change_and_ai_delay_during_authentication(trial):
+    auto, ws, clock = trial
+    await auto.start(ws.session["id"])
+    ws.seed_chorus()
+    original_send = ws._send_danmaku_locked
+
+    async def authentication_then_guard(sid, text, *, before_post, source):
+        ws.danmaku_style["revision"] += 1
+        ws.pending_danmaku_style_updates += 1
+        ws.age = 999
+        clock.advance(2)
+        await original_send(sid, text, before_post=before_post, source=source)
+
+    ws._send_danmaku_locked = authentication_then_guard
+    await tick(auto)
+    assert [item["text"] for item in ws.attempts] == ["好好好"]
+    assert auto.data["history"][-1]["status"] == "accepted"
+
+
+@pytest.mark.asyncio
+async def test_new_successful_duplicate_during_authentication_blocks_chorus(trial):
+    auto, ws, clock = trial
+    await auto.start(ws.session["id"])
+    ws.seed_chorus()
+
+    async def authentication_then_guard(sid, text, *, before_post, source):
+        clock.advance(1)
+        ws.sent_danmaku.append({"text": text, "sent_at": clock.time()})
+        before_post()
+        pytest.fail("A newly successful duplicate must not be posted again")
+
+    ws._send_danmaku_locked = authentication_then_guard
+    await tick(auto)
+    assert ws.attempts == [] and auto.data["history"][-1]["code"] == "trial_stale"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("change", ["session", "room", "offline", "stop"])
+async def test_chorus_still_obeys_session_live_and_stop_guards_during_authentication(trial, change):
+    auto, ws, _ = trial
+    await auto.start(ws.session["id"])
+    ws.seed_chorus()
+
+    async def authentication_then_guard(sid, text, *, before_post, source):
+        if change == "session":
+            ws.session["id"] = "another-session"
+        elif change == "room":
+            ws.room.room_id = 456
+        elif change == "offline":
+            ws.room.live_status = 0
+        else:
+            auto.stop_requested = True
+        before_post()
+        pytest.fail("Session / room / stop guards apply equally to audience choruses")
+
+    ws._send_danmaku_locked = authentication_then_guard
+    await tick(auto)
+    assert ws.attempts == [] and auto.data["status"] == "stopped"
+    assert auto.data["history"][-1]["code"] == "trial_stopped"

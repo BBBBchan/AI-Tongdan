@@ -235,6 +235,8 @@ def test_rotation_style_ranking_and_output_limits(tmp_path):
     write(tmp_path, "sample.json", {"messages": [
         "杯子颜色好看", "杯子表演加油", "杯子谢谢你", "杯子支持一下", "杯子好耶", "杯子真的厉害",
         "杯子就这", "杯子这下赢麻了", "杯子典中典", "杯子不会吧", "杯子急了", "你管这叫杯子",
+        "别尬黑杯子，这是专业试水", "别尬黑杯子，人家是在检查桌沿", "不许尬黑杯子，这叫战略落地",
+        "杯子不是掉水，是在测试水温", "杯子不是失误，是给对面留面子", "杯子不是翻车，是控制胜率",
     ]})
     store = DanmakuCorpus(tmp_path)
     store.refresh()
@@ -249,6 +251,35 @@ def test_rotation_style_ranking_and_output_limits(tmp_path):
     assert sum(map(len, second)) <= 192
     assert all(len(text) <= 48 for text in second)
     assert store.select(context(), 30, limit=0) == []
+
+
+@pytest.mark.parametrize("text", [
+    "急了", "就这", "典中典", "杯子这下赢麻了", "你管这叫杯子", "难绷", "逆天",
+])
+def test_plain_provocation_does_not_receive_highest_irony_preference(text):
+    assert 70 <= corpus_module._style(text) < 90
+
+
+@pytest.mark.parametrize("text", [
+    "故意练习这个动作", "这次战术安排很合理", "谢谢提醒", "确实", "这下完成了", "不会吧",
+    "杯子不是失误，是设备故障", "不是跑调，是换了调", "这是给新手的练习机会", "测试水温再下水",
+    "别尬黑", "这叫战术", "不是失误", "不是失误，是故意的",
+])
+def test_ambiguous_words_and_literal_explanations_do_not_imply_irony(text):
+    assert corpus_module._style(text) < 90
+
+
+def test_high_slider_prefers_mock_defence_over_plain_jabs_and_gentle_excludes_both(tmp_path):
+    humorous = {"别尬黑杯子，这是专业试水", "杯子不是掉水，是在测试水温", "杯子不是失误，是给对面留面子"}
+    jabs = {"杯子急了", "杯子典中典", "杯子就这"}
+    gentle = {"杯子颜色好看", "杯子表演加油", "杯子好耶"}
+    write(tmp_path, "sample.json", {"messages": sorted(humorous | jabs | gentle)})
+    store = DanmakuCorpus(tmp_path)
+    store.refresh()
+    selected = store.select(context(), 100, limit=3)
+    assert len(selected) == 3
+    assert set(selected) == humorous
+    assert set(store.select(context(), 0, limit=6)) == gentle
 
 
 @pytest.mark.parametrize("text", ["？", "???", "？！", "666", "1111", "哦哦", "嗯？", "啊？", "确实", "没看清", "这咋了", "哈哈哈哈"])

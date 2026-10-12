@@ -1,7 +1,7 @@
 'use strict';
 (() => {
   const $ = (id) => document.getElementById(id);
-  const state = {session: {}, room: {}, playback: {}, observer: {}, observations: [], memory: {}, messages: [], danmaku: [], sent_danmaku: [], danmaku_status: {}, danmaku_send: {}, danmaku_candidates: {}, danmaku_auto: {}, danmaku_style: {value:30,revision:0,mode:'builtin'}, danmaku_corpus: {}, model: {}, audio: {segments: [], speakers: []}};
+  const state = {session: {}, room: {}, playback: {}, observer: {}, observations: [], memory: {}, messages: [], danmaku: [], sent_danmaku: [], danmaku_status: {}, danmaku_send: {}, danmaku_candidates: {}, danmaku_chorus: {}, danmaku_auto: {}, danmaku_style: {value:30,revision:0,mode:'builtin'}, danmaku_corpus: {}, model: {}, audio: {segments: [], speakers: []}};
   const statusNames = {idle: '尚未连接', connecting: '连接中', waiting: '等待开播', live: '直播中', stopped: '已断开', error: '连接异常', reconnecting: '重新连接中'};
   const observerNames = {waiting_frames: '等待下一帧', waiting_model: '未配置模型', retrying: '重试观察中', idle: '等待直播', waiting: '等待画面', running: '持续观察中', observing: '正在观察', thinking: '正在观察', active: '持续观察中', ready: '已就绪', connecting: '连接模型中', stopped: '观察已停止', error: '观察异常', unavailable: '模型不可用', disabled: '未配置模型', unconfigured: '未配置模型'};
   let roomInputDirty = false;
@@ -10,7 +10,7 @@
   let danmakuTotal = 0, danmakuLane = 0, activeTab = 'activity', submittingQuestion = false;
   let speakerActionBusy = false, speakerMergeOptionsSignature = '';
   let danmakuSending = false, danmakuCredentialsSaving = false, danmakuCandidatesSignature = '';
-  let sentDanmakuSignature = '';
+  let sentDanmakuSignature = '', danmakuChorusSignature = '';
   let danmakuAutoBusy = '';
   let danmakuStyleEditing = false, danmakuStylePending = false, danmakuStyleRequestVersion = 0;
   let danmakuStyleSaveChain = Promise.resolve();
@@ -50,7 +50,7 @@
     pendingQuestions.clear(); localDrafts.clear(); questionPlans.clear(); openedPlans.clear(); openedAudioEvidence.clear(); danmakuTotal = 0;
     state.observations = []; state.messages = []; state.danmaku = []; state.sent_danmaku = []; sentDanmakuSignature = ''; state.memory = {}; state.observer = {};
     understandingSample = null; understandingSourceWatermark = null;
-    state.danmaku_candidates = {}; state.danmaku_auto = {}; danmakuCandidatesSignature = ''; recentDanmaku = []; $('danmaku-copy-fallback').hidden = true;
+    state.danmaku_candidates = {}; state.danmaku_chorus = {}; danmakuChorusSignature = ''; state.danmaku_auto = {}; danmakuCandidatesSignature = ''; recentDanmaku = []; $('danmaku-copy-fallback').hidden = true;
     state.danmaku_style = {value:30,revision:0,mode:'builtin'}; state.danmaku_corpus = {}; danmakuStyleEditing = false; danmakuStylePending = false; danmakuStyleRequestVersion++; danmakuStyleSaveChain = Promise.resolve();
     if ($('danmaku-auto-feedback')) $('danmaku-auto-feedback').hidden = true;
     if ($('danmaku-style-feedback')) $('danmaku-style-feedback').hidden = true;
@@ -64,7 +64,7 @@
     const data = incoming.state && isObject(incoming.state) ? incoming.state : incoming;
     const sessionChanged = data.session?.id && state.session.id && data.session.id !== state.session.id;
     if (sessionChanged) resetSession();
-    for (const key of ['session','room','playback','observer','memory','model','danmaku_status','danmaku_send','danmaku_auto','audio']) if (isObject(data[key])) state[key] = data[key];
+    for (const key of ['session','room','playback','observer','memory','model','danmaku_status','danmaku_send','danmaku_chorus','danmaku_auto','audio']) if (isObject(data[key])) state[key] = data[key];
     const styleCurrent = sessionChanged || options.styleRequestVersion === undefined || options.styleRequestVersion === danmakuStyleRequestVersion;
     if (styleCurrent && !danmakuStylePending) {
       applyDanmakuStyle(data.danmaku_style,Boolean(options.resetStyle || sessionChanged));
@@ -577,7 +577,13 @@
     const items = list(candidates.items).filter(item => plain(item.text).trim()).slice(0,5), signature = JSON.stringify(items);
     if (signature !== danmakuCandidatesSignature) {
       danmakuCandidatesSignature = signature;
-      const nodes = items.map(item => { const button = make('button','danmaku-candidate',item.text); button.type = 'button'; button.dataset.candidateId = String(item.id ?? ''); button.title = '只填入输入框，点击发送弹幕后才会发送'; button.addEventListener('click',() => { $('danmaku-send-input').value = plain(item.text); renderDanmakuComposer(); $('danmaku-send-input').focus(); }); return button; });
+      const nodes = items.map(item => {
+        const button = make('button','danmaku-candidate',item.text);
+        button.type = 'button'; button.dataset.candidateId = String(item.id ?? '');
+        button.title = '只填入输入框，点击发送弹幕后才会发送';
+        button.addEventListener('click',() => { $('danmaku-send-input').value = plain(item.text); renderDanmakuComposer(); $('danmaku-send-input').focus(); });
+        return button;
+      });
       $('danmaku-candidates').replaceChildren(...(nodes.length ? nodes : [make('span','danmaku-candidate-empty','理解直播内容后，这里会更新 5 条候选。')]));
     }
     const updated = items.length && candidates.generated_at ? `${formatTime(candidates.generated_at)} 更新` : '';
@@ -587,6 +593,25 @@
     renderDanmakuStyle();
     renderDanmakuAuto();
     renderSentDanmaku();
+    renderDanmakuChorus();
+  }
+  function renderDanmakuChorus() {
+    const chorus = state.danmaku_chorus || {};
+    const items = chorus.session_id && chorus.session_id !== state.session.id ? [] : list(chorus.items).filter(item => plain(item.text).trim()).slice(0,3);
+    const signature = JSON.stringify(items);
+    if (signature === danmakuChorusSignature) return;
+    danmakuChorusSignature = signature;
+    const nodes = items.map(item => {
+      const button = make("button","danmaku-chorus-item");
+      button.type = "button"; button.title = "点击填入原文，确认后发送";
+      button.append(make("span","danmaku-chorus-text",item.text));
+      const count = Number(item.count);
+      if (Number.isFinite(count) && count > 0) button.append(make("span","danmaku-chorus-count",`近 30 秒 ×${Math.floor(count)}`));
+      button.addEventListener("click",() => { $("danmaku-send-input").value = plain(item.text); renderDanmakuComposer(); $("danmaku-send-input").focus(); });
+      return button;
+    });
+    $("danmaku-chorus-items").replaceChildren(...nodes);
+    $("danmaku-chorus-empty").hidden = items.length > 0;
   }
   function renderSentDanmaku() {
     const container = $('danmaku-sent-list');
@@ -834,6 +859,7 @@
     if (envelope.session_id && state.session.id && envelope.session_id !== state.session.id && !['state','session'].includes(type)) return;
     if (['audio_segment','audio_status','audio_speakers'].includes(type)) { handleAudioEvent(type,data); return; }
     if (type === 'danmaku_candidates') { if (!danmakuStylePending) applyDanmakuCandidates(data.danmaku_candidates || data); renderDanmakuComposer(); return; }
+    if (type === 'danmaku_chorus') { state.danmaku_chorus = data.danmaku_chorus || data; renderDanmakuChorus(); return; }
     if (type === 'danmaku_send_status') { state.danmaku_send = {...state.danmaku_send,...(data.danmaku_send || data)}; renderDanmakuComposer(); return; }
     if (type === 'sent_danmaku') { if (Array.isArray(data.items)) { state.sent_danmaku = data.items; renderSentDanmaku(); } return; }
     if (type === 'danmaku_auto') { const auto = data.danmaku_auto || data; if (!auto.session_id || auto.session_id === state.session.id) { state.danmaku_auto = auto; renderDanmakuAuto(); } return; }
@@ -870,7 +896,7 @@
     eventSource.onopen = () => { seenEvents.clear(); lastEventId = null; recentDanmaku = []; $('events-status').textContent = '工作台已连接'; setDot($('events-dot'),'good'); refreshState({resetStyle:true}); };
     eventSource.onerror = (event) => { if (event.data) return; $('events-status').textContent = '实时通道重连中'; setDot($('events-dot'),'warn'); };
     eventSource.onmessage = (event) => handleEvent(event.data);
-    ['state','session','observation','memory','observer','danmaku','danmaku_candidates','danmaku_send_status','sent_danmaku','danmaku_auto','danmaku_style','danmaku_corpus','question_started','plan','answer_delta','answer_done','error','playback','audio_segment','audio_status','audio_speakers'].forEach(type => eventSource.addEventListener(type,event => { if (event.data) handleEvent(event.data,type); }));
+    ['state','session','observation','memory','observer','danmaku','danmaku_candidates','danmaku_chorus','danmaku_send_status','sent_danmaku','danmaku_auto','danmaku_style','danmaku_corpus','question_started','plan','answer_delta','answer_done','error','playback','audio_segment','audio_status','audio_speakers'].forEach(type => eventSource.addEventListener(type,event => { if (event.data) handleEvent(event.data,type); }));
   }
   async function connectRoom(event) {
     event.preventDefault(); const room = $('room-input').value.trim(); if (!room || sourceBusy) return;

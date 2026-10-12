@@ -64,6 +64,10 @@ _REACTION_PARTICLES = re.compile(r"[啊哦噢喔哎唉诶欸嗯恩呃额哈嘿�
 _REACTION_PHRASE = re.compile(r"(?:[真假是好对]{1,3}[的吗吧呀嘞啊诶呢了嘛]?|[不没][懂会行对错好][了啦呀啊嘛吧吗呢]?)")
 _REACTION_PUNCTUATION = re.compile(r"[?？!！~～…]+")
 _COMPACT_PUNCTUATION = re.compile(r"[\s，。！？!?、~～….,:：;；]")
+_IRONY_STRUCTURE = re.compile(
+    r"(?:别尬黑|不许尬黑)[^。！？!?]{0,16}(?:这是|这叫|人家是在|人家是|主打一个)[^。！？!?]{2,16}"
+    r"|(?:不是|不叫)(?:失误|翻车|跑调|掉水|送分)[，, ]*(?:而?是|这叫)[^。！？!?]{0,6}"
+    r"(?:给[^。！？!?]{1,8}(?:机会|留面子|信心)|让[^。！？!?]{1,8}体验|测试水温|考察水温|检查复活点|控制胜率)")
 
 
 def is_common_reaction(text: str) -> bool:
@@ -130,10 +134,12 @@ def _terms(text: str) -> frozenset[str]:
 
 
 def _style(text: str) -> int:
-    # This lexical estimate ranks references; it does not override the slider.
-    if re.search(r"急了|典中典|就这|不会吧|赢麻|这下|你管这叫", text):
+    # Only a retrieval hint, never a semantic judgment that a line is funny or
+    # ironic. Paired mock-defence/reframing cues outrank plain provocative words;
+    # ambiguous "故意/战术/这下/不会吧" alone carry no high-style preference.
+    if _IRONY_STRUCTURE.search(text):
         return 90
-    if re.search(r"离谱|难绷|绷不住|抽象|逆天|蚌埠住|还能这样", text):
+    if re.search(r"急了|典中典|就这|赢麻|你管这叫|离谱|难绷|绷不住|抽象|逆天|蚌埠住|还能这样", text):
         return 70
     if re.search(r"[?？]|真的假的|笑死|救命|好家伙", text):
         return 55

@@ -37,6 +37,46 @@ def snapshot():
 
 
 @pytest.mark.asyncio
+async def test_chorus_uses_full_recent_window_without_sending_identity_to_model():
+    state = snapshot()
+    state["danmaku"] = [
+        {"timestamp": 92 + i / 10, "text": "这波稳了", "user_id": 101 + i,
+         "user_name": f"private_viewer_{i}", "message_id": f"private_message_{i}"}
+        for i in range(4)
+    ] + [{"timestamp": 94 + i / 10, "text": f"接话{i}"} for i in range(6)]
+    context = candidate_context(state, source_time=100)
+    assert all(item["text"] != "这波稳了" for item in context["audience_comments"])
+    assert len(context["audience_chorus"]) == 1
+    assert context["audience_chorus"][0]["text"] == "这波稳了"
+    assert context["audience_chorus"][0]["count"] == 4
+    assert context["audience_chorus"][0]["total"] == 10
+    model = Model()
+    await generate_candidates(model, context)
+    messages = json.dumps(model.calls[0][0], ensure_ascii=False)
+    assert "user_id" not in messages and "user_name" not in messages
+    assert "private_viewer_" not in messages and "private_message_" not in messages
+    expired = candidate_context(state, source_time=131)
+    assert expired["audience_chorus"] == []
+    assert await generate_candidates(model, expired) == []
+    assert len(model.calls) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["builtin", "local"])
+async def test_high_style_defines_humorous_stance_in_both_prompt_paths(mode):
+    state = snapshot()
+    state["danmaku_style"] = {"value": 100, "mode": mode}
+    context = candidate_context(state, source_time=100)
+    context["style_references"] = ["不是迷路，是勘察地形"]
+    model = Model()
+    await generate_candidates(model, context)
+    prompt = model.calls[0][0][0]["content"]
+    assert "有幽默感的反串" in prompt and "一本正经说反话" in prompt
+    assert "动作、结果和他人说过的话仍须真实有据" in prompt
+    assert "轻度拱火" not in prompt
+
+
+@pytest.mark.asyncio
 async def test_room_visual_ocr_audio_and_chat_all_reach_candidate_prompt():
     context = candidate_context(snapshot(), source_time=100)
     model = Model()

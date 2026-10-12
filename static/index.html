@@ -8,9 +8,9 @@
   <title>AI同担—你的AI直播同担</title>
   <link rel="icon" type="image/png" href="/static/brand/ai-tongdan-logo.png">
   <link rel="apple-touch-icon" href="/static/brand/ai-tongdan-logo.png">
-  <link rel="stylesheet" href="/static/app.css?v=danmaku-no-deadline-1">
+  <link rel="stylesheet" href="/static/app.css?v=danmaku-chorus-1">
   <script defer src="/static/vendor/hls.min.js"></script>
-  <script defer src="/static/app.js?v=danmaku-no-deadline-1"></script>
+  <script defer src="/static/app.js?v=danmaku-chorus-1"></script>
 </head>
 <body>
   <header class="topbar">
@@ -58,6 +58,11 @@
               <div class="danmaku-style-heading"><label for="danmaku-style-range">候选风格</label><span id="danmaku-style-label">轻松接梗</span></div><div class="danmaku-style-control"><span>纯良</span><input id="danmaku-style-range" type="range" min="0" max="100" step="1" value="30" aria-describedby="danmaku-style-label" disabled><span>开串</span></div><p id="danmaku-style-feedback" role="status" hidden></p>
             </div>
             <div id="danmaku-candidates" class="danmaku-candidates"><span class="danmaku-candidate-empty">理解直播内容后，这里会更新 5 条候选。</span></div>
+            <section class="danmaku-chorus" aria-labelledby="danmaku-chorus-heading">
+              <div class="danmaku-candidate-heading"><strong id="danmaku-chorus-heading">大家在刷</strong><span>跟上队形！一键融入也会从这里选</span></div>
+              <div id="danmaku-chorus-items" class="danmaku-chorus-items"></div>
+              <p id="danmaku-chorus-empty" class="danmaku-candidate-empty">还没有集中复读，大家刷起来时会自动出现。</p>
+            </section>
             <form id="danmaku-send-form" class="danmaku-send-form"><label for="danmaku-send-input" class="sr-only">要发送到直播间的弹幕</label><input id="danmaku-send-input" type="text" maxlength="100" autocomplete="off" placeholder="编辑弹幕，点击发送到当前直播间"><button id="danmaku-send-button" class="primary-button" type="submit" disabled>发送弹幕</button></form>
             <div class="danmaku-compose-actions"><button id="danmaku-copy-recent" class="quiet-button" type="button">复制近 2 秒随机弹幕</button><button id="danmaku-login-toggle" class="text-link" type="button" aria-expanded="false" aria-controls="danmaku-login-form">配置本人登录</button></div>
             <div id="danmaku-auto" class="danmaku-auto" data-status="idle">

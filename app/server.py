@@ -28,9 +28,10 @@ from .audio import AudioPipeline
 from .bilibili import BilibiliClient
 from .config import ROOT, Settings
 from .danmaku_candidates import candidate_context, generate_candidates
+from .danmaku_chorus import detect_choruses
 from .danmaku_corpus import DanmakuCorpus
 from .danmaku_auto import AutoDanmaku
-from .danmaku_send import DanmakuCredentials, DanmakuSender, DanmakuSendError
+from .danmaku_send import MAX_DANMAKU_LENGTH, DanmakuCredentials, DanmakuSender, DanmakuSendError
 from .events import EventBus
 from .journal import SessionJournal
 from .media import MediaCapture
@@ -103,6 +104,7 @@ class Workspace:
         self.last_danmaku_sent_at = None
         self.danmaku_send_error = None
         self.danmaku_candidates = {"items": [], "status": "waiting", "generated_at": None}
+        self.danmaku_chorus = {"items": [], "session_id": None, "updated_at": None}
         self.danmaku_style = {"value": 30, "revision": 0, "mode": "builtin"}
         try:
             with (settings.data_dir / "danmaku_preferences.json").open() as handle:
@@ -175,6 +177,7 @@ class Workspace:
             "danmaku_send": self.danmaku_send_status(),
             "sent_danmaku": [dict(item) for item in self.sent_danmaku],
             "danmaku_candidates": dict(self.danmaku_candidates),
+            "danmaku_chorus": dict(self.danmaku_chorus),
             "danmaku_style": dict(self.danmaku_style),
             "danmaku_corpus": self.corpus_status(),
             "danmaku_auto": self.danmaku_auto.snapshot(),
@@ -237,6 +240,7 @@ class Workspace:
             if saved:
                 self._restore_sent_danmaku(directory)
             self.danmaku_candidates = {"items": [], "status": "waiting", "generated_at": None}
+            self.danmaku_chorus = {"items": [], "session_id": sid, "updated_at": None}
             self.danmaku_send_error = None
             self.danmaku_status = {"status": "connecting"}
             self.playback = {
@@ -291,7 +295,8 @@ class Workspace:
             self.tasks = [asyncio.create_task(self._stream_loop(sid, directory)),
                           asyncio.create_task(self._danmaku_loop(sid)),
                           asyncio.create_task(self._model_loop(sid)),
-                          asyncio.create_task(self._candidate_loop(sid))]
+                          asyncio.create_task(self._candidate_loop(sid)),
+                          asyncio.create_task(self._chorus_loop(sid))]
             self._remember_active()
             await self.state()
             return self.snapshot()
@@ -322,6 +327,7 @@ class Workspace:
         self.capture = None
         if self.session:
             self.session.update(status="stopped", stopped_at=time.time())
+            self._update_chorus(self.session["id"])
         self.playback["ready"] = False
         self.danmaku_status = {"status": "disconnected"}
 
@@ -512,6 +518,45 @@ class Workspace:
             refreshing.cancel()
             await asyncio.gather(sleeping, refreshing, return_exceptions=True)
 
+    def _update_chorus(self, sid):
+        """Keep live audience repetitions separate from the five model drafts."""
+        if not self.session or self.session["id"] != sid:
+            return False
+        before = self.danmaku_chorus
+        active = (self.session.get("status") not in {"stopped", "idle"}
+                  and self.room and self.room.live_status == 1)
+        matches = detect_choruses(list(self.danmaku),
+            end=time.monotonic() - self.clock_start,
+            max_length=MAX_DANMAKU_LENGTH) if active else []
+        old_items = ({item["text"]: item for item in before["items"]}
+                     if before["session_id"] == sid else {})
+        items = []
+        now = time.time()
+        for match in matches[:3]:
+            old = old_items.get(match["text"])
+            # Preserve IDs and update timestamps when the evidence changes.
+            # source_time is the latest actual matching audience event, not
+            # this ticker's time, so automated selection can assess its age.
+            if old and all(old.get(key) == value for key, value in match.items()):
+                items.append(old)
+            else:
+                items.append({**match, "id": old["id"] if old else uuid.uuid4().hex,
+                              "kind": "chorus", "updated_at": now})
+        if items == before["items"] and before["session_id"] == sid:
+            return False
+        self.danmaku_chorus = {"items": items, "session_id": sid, "updated_at": now}
+        return True
+
+    async def _refresh_chorus(self, sid):
+        if self._update_chorus(sid):
+            await self.emit("danmaku_chorus", dict(self.danmaku_chorus))
+
+    async def _chorus_loop(self, sid):
+        """Expire repetitions even while a model request or question is pending."""
+        while self.session and self.session["id"] == sid:
+            await self._refresh_chorus(sid)
+            await asyncio.sleep(1)
+
     async def _candidate_loop(self, sid):
         """Refresh drafts from actual recent sources; never calls the send API."""
         previous = None
@@ -590,10 +635,14 @@ class Workspace:
                 except asyncio.CancelledError:
                     raise
                 except ModelBusy:
+                    if not self.session or self.session["id"] != sid:
+                        return
                     if style_revision != self.danmaku_style["revision"]:
                         continue
                     self.danmaku_candidates = {**self.danmaku_candidates, "status": "deferred", "error": None}
                 except Exception:
+                    if not self.session or self.session["id"] != sid:
+                        return
                     if style_revision != self.danmaku_style["revision"]:
                         continue
                     self.danmaku_candidates = {**self.danmaku_candidates, "status": "error",
@@ -697,6 +746,7 @@ class Workspace:
                         if asyncio.iscoroutine(result):
                             await result
                     await self.emit("danmaku", event)
+                    await self._refresh_chorus(sid)
                 elif kind == "connection":
                     self.danmaku_status = event
                     await self.state()

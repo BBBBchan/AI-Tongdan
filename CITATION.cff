@@ -11,6 +11,11 @@ preferred-citation:
   type: generic
   title: "DeltaStreamer: Towards Human-Like Agentic Streaming Video Understanding"
   year: 2026
+  url: "https://arxiv.org/abs/2610.19849"
+  identifiers:
+    - type: other
+      value: "arXiv:2610.19849"
+      description: "arXiv preprint"
   authors:
     - family-names: Sun
       given-names: Boyuan

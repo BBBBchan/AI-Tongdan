@@ -3,6 +3,7 @@ import asyncio
 from collections import deque
 from contextlib import asynccontextmanager, suppress
 from dataclasses import asdict
+from functools import wraps
 from io import BytesIO
 import base64
 import json
@@ -18,7 +19,7 @@ from urllib.parse import urlparse
 import uuid
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from PIL import Image
@@ -34,12 +35,34 @@ from .danmaku_auto import AutoDanmaku
 from .danmaku_send import MAX_DANMAKU_LENGTH, DanmakuCredentials, DanmakuSender, DanmakuSendError
 from .events import EventBus
 from .journal import SessionJournal
+from .local_danmaku import LocalDanmakuBroker
 from .media import MediaCapture
 from .model import ModelBusy, VisionModel
 
 
+def _fence_session_change(method):
+    """Fence every overlapping switch before it can wait on room I/O/locks."""
+    @wraps(method)
+    async def changing(workspace, *args, **kwargs):
+        workspace.pending_session_changes += 1
+        workspace.local_danmaku.cancel()
+        try:
+            return await method(workspace, *args, **kwargs)
+        finally:
+            workspace.pending_session_changes -= 1
+    return changing
+
+
 class SessionRequest(BaseModel):
     room: str = Field(min_length=1, max_length=500)
+    candidate_count: int = Field(default=5, ge=1, le=10, strict=True)
+    candidate_only: bool = Field(default=False, strict=True)
+    allow_manual_send: bool = Field(default=False, strict=True)
+
+
+class DanmakuPolicyRequest(BaseModel):
+    session_id: str
+    allow_manual_send: bool = Field(strict=True)
 
 
 class QuestionRequest(BaseModel):
@@ -61,6 +84,10 @@ class SpeakerMergeRequest(BaseModel):
 class DanmakuRequest(BaseModel):
     session_id: str
     text: str = Field(min_length=1, max_length=1000)
+
+
+class DanmakuTransportRequest(BaseModel):
+    mode: Literal["server", "local"]
 
 
 class AutoDanmakuRequest(BaseModel):
@@ -93,14 +120,31 @@ class Workspace:
         self.danmaku = deque(maxlen=150)
         self.sent_danmaku = deque(maxlen=30)
         self.tasks = []
+        self._shutdown_pending = set()
+        self._shutdown_background = set()
+        self._shutdown_failed = False
+        self.shutdown_timeout = 5.0
+        self.shutdown_retry_timeout = 1.0
         self.capture = None
         self.lock = asyncio.Lock()
+        self.local_danmaku_send_lock = asyncio.Lock()
         self.model_lock = asyncio.Lock()
         self.clock_start = time.monotonic()
         self.danmaku_status = {"status": "disconnected"}
         self.resume_error = None
         self.danmaku_credentials = DanmakuCredentials(settings.data_dir, env_cookie=settings.bilibili_cookie)
         self.danmaku_sender = DanmakuSender(self.danmaku_credentials)
+        self.local_danmaku = LocalDanmakuBroker(source_guard=self.require_danmaku_send_enabled)
+        self.danmaku_transport = "server"
+        self.pending_danmaku_transport_updates = 0
+        self.pending_session_changes = 0
+        try:
+            transport = json.loads((settings.data_dir / "danmaku_transport.json").read_text())
+            self.danmaku_transport = transport["mode"] if transport.get("mode") in {"server", "local"} else "local"
+        except FileNotFoundError:
+            pass
+        except (OSError, ValueError, TypeError, AttributeError):
+            self.danmaku_transport = "local"  # Never fall back on a damaged saved choice.
         self.last_danmaku_sent_at = None
         self.danmaku_send_error = None
         self.danmaku_candidates = {"items": [], "status": "waiting", "generated_at": None}
@@ -125,12 +169,114 @@ class Workspace:
         self.danmaku_auto = AutoDanmaku(self)
 
     def danmaku_send_status(self):
-        status = self.danmaku_credentials.status()
-        active = bool(self.session and self.session["status"] not in {"stopped", "idle"}
+        connected = self.local_danmaku.connected
+        local = self.danmaku_transport == "local"
+        status = ({"configured": connected, "source": "local_helper", "max_length": MAX_DANMAKU_LENGTH}
+                  if local else self.danmaku_credentials.status())
+        receipt = getattr(self.local_danmaku if local else self.danmaku_sender, "last_receipt", None)
+        active = bool(self.session_active(self.session["id"] if self.session else None)
                       and self.room and self.room.live_status == 1)
-        return {**status, "can_send": status["configured"] and active,
-                "status": "ready" if status["configured"] else "login_required",
-                "error": self.danmaku_send_error}
+        candidate_only = self.candidate_only
+        manual_only = candidate_only and self.allow_manual_send
+        policy_reason = ("仅手动发送，自动发送已禁用" if manual_only else
+                         "当前会话只生成候选，不发送弹幕。" if candidate_only else None)
+        return {**status, "can_send": status["configured"] and active and (not candidate_only or manual_only),
+                "can_auto_send": status["configured"] and active and not candidate_only,
+                "status": "manual_only" if manual_only else "candidate_only" if candidate_only else "ready" if status["configured"] else "local_disconnected" if local else "login_required",
+                "candidate_only": candidate_only,
+                "allow_manual_send": self.allow_manual_send,
+                "reason": policy_reason,
+                "auto_disabled_reason": policy_reason,
+                "transport": self.danmaku_transport, "local_connected": connected,
+                "local_paired": self.local_danmaku.paired,
+                "pairing_required": local and not connected,
+                "error": self.danmaku_send_error,
+                "last_receipt": dict(receipt) if isinstance(receipt, dict) else None}
+
+    @property
+    def candidate_only(self):
+        return bool(self.session and self.session.get("candidate_only", False))
+
+    @property
+    def allow_manual_send(self):
+        return bool(self.session and self.session.get("allow_manual_send") is True)
+
+    def require_danmaku_send_enabled(self, source="manual"):
+        """The session policy applies to every transport, including final POST guards."""
+        if source not in {"manual", "auto"}:
+            raise ValueError("Unknown danmaku source")
+        if self.candidate_only:
+            if self.allow_manual_send:
+                if source == "manual":
+                    return
+                raise DanmakuSendError("仅手动发送，自动发送已禁用", 409, "auto_send_disabled")
+            raise DanmakuSendError("当前会话只生成候选，不发送弹幕。", 409, "candidate_only")
+
+    def _persist_session(self, session):
+        """Commit session policy before publishing it in memory or to clients."""
+        directory = self.settings.data_dir / "sessions" / session["id"]
+        fd, temporary = tempfile.mkstemp(prefix=".session-", suffix=".tmp", dir=directory)
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as stream:
+                json.dump({"session": session, "room": asdict(self.room),
+                           "model": self.settings.model_config()["model"]},
+                          stream, ensure_ascii=False, indent=2)
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.replace(temporary, directory / "session.json")
+        finally:
+            with suppress(FileNotFoundError):
+                os.unlink(temporary)
+
+    async def set_danmaku_policy(self, session_id, allow_manual_send):
+        if type(allow_manual_send) is not bool:
+            raise DanmakuSendError("手动发送配置必须为布尔值。", 400, "invalid_request")
+        async with self.lock:
+            if (not self.session_active(session_id) or self.pending_session_changes):
+                raise DanmakuSendError("直播会话已变更，请刷新当前房间。", 409, "session_changed")
+            if not self.candidate_only:
+                raise DanmakuSendError("该设置只用于轮巡候选会话。", 409, "policy_not_applicable")
+            updated = {**self.session, "allow_manual_send": allow_manual_send}
+            # Stops and cancellations fail closed. A failed save must never
+            # grant manual permission in memory while leaving the old policy on disk.
+            await self.danmaku_auto.stop("自动发送已禁用")
+            self.local_danmaku.cancel()
+            self._persist_session(updated)
+            self.session = updated
+            self.danmaku_send_error = None
+            status = self.danmaku_send_status()
+            await self.emit("danmaku_send_status", status)
+            await self.state()
+            return {"session": dict(self.session), "danmaku_send": status,
+                    "danmaku_auto": self.danmaku_auto.snapshot()}
+
+    async def set_danmaku_transport(self, mode):
+        self.pending_danmaku_transport_updates += 1
+        self.danmaku_auto.stop_requested = True
+        self.local_danmaku.disconnect()
+        try:
+            async with self.lock:
+                await self.danmaku_auto.stop("发送方式已更改")
+                self.settings.data_dir.mkdir(parents=True, exist_ok=True)
+                fd, temporary = tempfile.mkstemp(prefix=".danmaku-transport-", dir=self.settings.data_dir)
+                try:
+                    with os.fdopen(fd, "w", encoding="utf-8") as stream:
+                        json.dump({"mode": mode}, stream)
+                    os.replace(temporary, self.settings.data_dir / "danmaku_transport.json")
+                finally:
+                    with suppress(FileNotFoundError):
+                        os.unlink(temporary)
+                self.danmaku_transport = mode
+                self.danmaku_send_error = None
+                status = self.danmaku_send_status()
+                await self.emit("danmaku_send_status", status)
+                return status
+        finally:
+            self.pending_danmaku_transport_updates -= 1
+
+    def session_active(self, sid):
+        return bool(self.session and self.session["id"] == sid
+                    and self.session["status"] not in {"stopping", "stopping_failed", "stopped", "idle"})
 
     @property
     def active_path(self):
@@ -208,7 +354,9 @@ class Workspace:
     async def state(self):
         await self.emit("state", self.snapshot())
 
-    async def start(self, room_input, *, resume_id=None):
+    @_fence_session_change
+    async def start(self, room_input, *, resume_id=None, candidate_count=5, candidate_only=False,
+                    allow_manual_send=False):
         async with self.lock:
             # A malformed new room must not stop a working session.
             room = await self.client.resolve_room(room_input.strip())
@@ -219,6 +367,14 @@ class Workspace:
                 saved = json.loads((self.settings.data_dir / "sessions" / resume_id / "session.json").read_text())
                 if saved["room"]["room_id"] != room.room_id:
                     raise ValueError("历史会话与直播间不一致")
+                # Resume the saved policy instead of silently turning a
+                # candidate-only run into a send-enabled default session.
+                candidate_count = saved["session"].get("candidate_count", 5)
+                candidate_only = saved["session"].get("candidate_only", False)
+                allow_manual_send = saved["session"].get("allow_manual_send", False)
+            if (type(candidate_count) is not int or not 1 <= candidate_count <= 10
+                    or type(candidate_only) is not bool or type(allow_manual_send) is not bool):
+                raise ValueError("候选会话配置无效，未启动或恢复会话。")
             await self._stop()
             self.danmaku_auto = AutoDanmaku(self)
             sid = resume_id or uuid.uuid4().hex
@@ -227,7 +383,9 @@ class Workspace:
             self.clock_start = time.monotonic()
             self.room = room
             self.session = {"id": sid, "status": "connecting", "room_input": room_input,
-                            "started_at": time.time(), "error": None}
+                            "started_at": time.time(), "error": None,
+                            "candidate_count": candidate_count, "candidate_only": candidate_only,
+                            "allow_manual_send": allow_manual_send}
             if saved:
                 started = float(saved["session"]["started_at"])
                 if math.isfinite(started) and started <= time.time():
@@ -252,7 +410,7 @@ class Workspace:
 
             async def emit_for_session(kind, payload):
                 # A cancelled old question cannot publish into the next room.
-                if self.session and self.session["id"] == sid:
+                if self.session_active(sid):
                     if kind in {"observation", "question_started", "plan", "answer_done", "error", "audio_segment", "audio_speakers"}:
                         try:
                             journal.append(kind, payload)
@@ -290,8 +448,7 @@ class Workspace:
                     # finish it before live audio competes for the ASR service.
                     await self.audio.rebuild_missing_references()
             await self.audio.start()
-            (directory / "session.json").write_text(json.dumps({"session": self.session,
-                "room": asdict(room), "model": self.settings.model_config()["model"]}, ensure_ascii=False, indent=2))
+            self._persist_session(self.session)
             self.tasks = [asyncio.create_task(self._stream_loop(sid, directory)),
                           asyncio.create_task(self._danmaku_loop(sid)),
                           asyncio.create_task(self._model_loop(sid)),
@@ -301,6 +458,7 @@ class Workspace:
             await self.state()
             return self.snapshot()
 
+    @_fence_session_change
     async def stop(self):
         async with self.lock:
             await self._stop()
@@ -309,21 +467,65 @@ class Workspace:
         return self.snapshot()
 
     async def _stop(self):
-        await self.danmaku_auto.stop("直播会话已结束或服务正在重启")
-        tasks, self.tasks = self.tasks, []
-        for task in tasks:
-            task.cancel()
-        if self.capture:
-            await self.capture.stop()
-        for task in tasks:
-            with suppress(asyncio.CancelledError, Exception):
-                await task
-        if self.agent:
-            if self.audio:
-                await self.audio.stop()
-            await self.agent.stop()
-        if self.model:
-            await self.model.close()
+        # Fence old producers before the first await. A cancelled receive can
+        # still finish, and a slow cleanup must never look like a live session.
+        if self.session:
+            self.session.update(status="stopping", error=None)
+        self.playback["ready"] = False
+        self.danmaku_status = {"status": "disconnected"}
+        self.danmaku_auto.stop_requested = True
+        self.local_danmaku.cancel()
+        await self.state()
+        if not self._shutdown_pending:
+            self._shutdown_failed = False
+            tasks, self.tasks = self.tasks, []
+            self._shutdown_background = set(tasks)
+            for task in tasks:
+                task.cancel()
+            cleanup = [("auto", self.danmaku_auto.stop("直播会话已结束或服务正在重启"))]
+            for name, component, method in (("capture", self.capture, "stop"),
+                                             ("audio", self.audio, "stop"),
+                                             ("agent", self.agent, "stop"),
+                                             ("model", self.model, "close")):
+                if component:
+                    cleanup.append((name, getattr(component, method)()))
+            self._shutdown_pending = set(tasks) | {
+                asyncio.create_task(coro, name=f"session-stop:{name}") for name, coro in cleanup}
+        else:
+            # Retry the same old resources; never lose ownership of a task
+            # that ignored cancellation or create a new room on top of it.
+            for task in self._shutdown_background:
+                if not task.done():
+                    task.cancel()
+        tracked = set(self._shutdown_pending)
+        try:
+            _, pending = await asyncio.wait(tracked, timeout=self.shutdown_timeout)
+            if pending:
+                for task in pending & self._shutdown_background:
+                    task.cancel()
+                _, pending = await asyncio.wait(pending, timeout=self.shutdown_retry_timeout)
+        except asyncio.CancelledError:
+            # An HTTP disconnect must not erase cleanup ownership. The next
+            # Stop/Connect request can finish it and release the workspace lock.
+            if self.session:
+                self.session.update(status="stopping_failed", error="停止被中断，请再次停止后重连。")
+            raise
+        earlier_failure = self._shutdown_failed
+        failed = [task for task in tracked if task.done() and not task.cancelled() and task.exception()]
+        self._shutdown_failed = earlier_failure or bool(failed)
+        self._shutdown_pending = pending
+        if pending or failed:
+            message = "旧直播会话尚未完全停止，请再次停止后重连。"
+            if self.session:
+                self.session.update(status="stopping_failed", error=message)
+            await self.state()
+            raise RuntimeError(message)
+        if earlier_failure:
+            # Some components failed while other tasks were still pending on
+            # an earlier attempt. Draining those tasks alone is insufficient:
+            # run component cleanup again before allowing the next room.
+            return await self._stop()
+        self._shutdown_background.clear()
         self.capture = None
         if self.session:
             self.session.update(status="stopped", stopped_at=time.time())
@@ -392,21 +594,38 @@ class Workspace:
 
     async def _send_danmaku_locked(self, session_id, text, *, before_post=None, source="manual"):
         """One send path for manual clicks and explicitly authorized trials."""
+        self.require_danmaku_send_enabled(source)
         if source not in {"manual", "auto"}:
             raise ValueError("Unknown danmaku source")
+        if self.pending_danmaku_transport_updates or self.pending_session_changes:
+            raise DanmakuSendError("直播间或发送方式正在更改，请稍后重新操作。", 409, "trial_stopped")
         if not self.session or session_id != self.session["id"]:
             raise DanmakuSendError("直播会话已变更，请检查房间后重新发送。", 409)
-        if self.session["status"] == "stopped" or not self.room or self.room.live_status != 1:
+        if not self.session_active(session_id) or not self.room or self.room.live_status != 1:
             raise DanmakuSendError("请先连接正在直播的房间。", 409)
         if self.last_danmaku_sent_at is not None and time.monotonic() - self.last_danmaku_sent_at < 3:
             raise DanmakuSendError("发送过于频繁，请稍等几秒。", 429, "rate_limited")
+        transport, room_id = self.danmaku_transport, self.room.room_id
+        def guard():
+            self.require_danmaku_send_enabled(source)
+            if (self.danmaku_transport != transport or self.pending_danmaku_transport_updates
+                    or self.pending_session_changes or not self.session_active(session_id)
+                    or not self.room or self.room.room_id != room_id or self.room.live_status != 1
+                    or (transport == "local" and self.session["status"] != "live")):
+                raise DanmakuSendError("直播间或发送方式已变更，未发送。", 409, "trial_stopped")
+            if before_post is not None:
+                before_post()
         try:
-            options = {"before_post": before_post} if before_post is not None else {}
-            result = await self.danmaku_sender.send(self.room.room_id, text, **options)
+            if transport == "local":
+                result = await self.local_danmaku.send(room_id, text, guard=guard, source=source)
+            else:
+                result = await self.danmaku_sender.send(room_id, text, before_post=guard)
         except DanmakuSendError as exc:
             self.danmaku_send_error = str(exc)
             await self.emit("danmaku_send_status", self.danmaku_send_status())
             raise
+        if not self.session or self.session["id"] != session_id:
+            raise DanmakuSendError("发送回执对应的直播会话已变更，请先核对原直播间，避免重复发送。", 409, "send_unknown")
         self.last_danmaku_sent_at = time.monotonic()
         self.sent_danmaku.append({"timestamp": self.last_danmaku_sent_at - self.clock_start,
                                   "text": result.get("text", text).strip(),
@@ -436,7 +655,7 @@ class Workspace:
                 await self.state()
 
     async def _model_loop(self, sid):
-        while self.session and self.session["id"] == sid:
+        while self.session_active(sid):
             await self.ensure_model()
             if self.model.configured:
                 return
@@ -523,7 +742,7 @@ class Workspace:
         if not self.session or self.session["id"] != sid:
             return False
         before = self.danmaku_chorus
-        active = (self.session.get("status") not in {"stopped", "idle"}
+        active = (self.session_active(sid)
                   and self.room and self.room.live_status == 1)
         matches = detect_choruses(list(self.danmaku),
             end=time.monotonic() - self.clock_start,
@@ -553,7 +772,7 @@ class Workspace:
 
     async def _chorus_loop(self, sid):
         """Expire repetitions even while a model request or question is pending."""
-        while self.session and self.session["id"] == sid:
+        while self.session_active(sid):
             await self._refresh_chorus(sid)
             await asyncio.sleep(1)
 
@@ -561,7 +780,7 @@ class Workspace:
         """Refresh drafts from actual recent sources; never calls the send API."""
         previous = None
         deferred_since = None
-        while self.session and self.session["id"] == sid:
+        while self.session_active(sid):
             self._candidate_refresh.clear()
             self._request_corpus_refresh()
             started = time.monotonic()
@@ -614,8 +833,9 @@ class Workspace:
                 try:
                     texts = await asyncio.wait_for(generate_candidates(self.model, context,
                         max_length=self.danmaku_credentials.status()["max_length"],
+                        count=self.session.get("candidate_count", 5),
                         allow_observations_busy=allow_observations_busy), timeout=10)
-                    if not self.session or self.session["id"] != sid:
+                    if not self.session_active(sid):
                         return
                     if (style_revision != self.danmaku_style["revision"] or
                             (context["style_mode"] == "local" and
@@ -624,6 +844,7 @@ class Workspace:
                     self.danmaku_candidates = {"items": [{"id": uuid.uuid4().hex, "text": text}
                                                          for text in texts],
                         "generated_at": time.time(), "source_time": context["source_time"], "session_id": sid,
+                        "requested_count": self.session.get("candidate_count", 5),
                         "style_revision": style_revision, "style_value": self.danmaku_style["value"],
                         "reference_mode": "local" if context.get("style_references") else "builtin",
                         "reference_count": len(context.get("style_references", [])),
@@ -635,13 +856,13 @@ class Workspace:
                 except asyncio.CancelledError:
                     raise
                 except ModelBusy:
-                    if not self.session or self.session["id"] != sid:
+                    if not self.session_active(sid):
                         return
                     if style_revision != self.danmaku_style["revision"]:
                         continue
                     self.danmaku_candidates = {**self.danmaku_candidates, "status": "deferred", "error": None}
                 except Exception:
-                    if not self.session or self.session["id"] != sid:
+                    if not self.session_active(sid):
                         return
                     if style_revision != self.danmaku_style["revision"]:
                         continue
@@ -656,9 +877,12 @@ class Workspace:
                        if p.is_dir() and re.fullmatch(r"g[0-9]+", p.name)] if media_root.exists() else []
         generation = max(generations, default=0)
         backoff = 3
-        while self.session and self.session["id"] == sid:
+        while self.session_active(sid):
             try:
-                self.room = await self.client.resolve_room(self.room.room_id)
+                room = await self.client.resolve_room(self.room.room_id)
+                if not self.session_active(sid):
+                    return
+                self.room = room
                 if self.room.live_status != 1:
                     self.session.update(status="waiting", error=None)
                     self.playback["ready"] = False
@@ -668,6 +892,8 @@ class Workspace:
                 if not self.settings.ffmpeg_available:
                     raise RuntimeError("未找到 FFmpeg。官方播放器仍可观看，安装 FFmpeg 后重新连接即可启用观察。")
                 sources = await self.client.get_play_sources(self.room.room_id)
+                if not self.session_active(sid):
+                    return
                 if not sources:
                     raise RuntimeError("直播平台暂未提供可读取的视频流")
                 # On reconnect rotate through returned CDNs before fetching again.
@@ -692,7 +918,7 @@ class Workspace:
                 last_poll = time.monotonic()
                 last_audio_status = None
                 try:
-                    while not task.done():
+                    while not task.done() and self.session_active(sid):
                         if capture.ready and not self.playback["ready"]:
                             self.playback["ready"] = True
                             await self.emit("playback", dict(self.playback))
@@ -708,6 +934,8 @@ class Workspace:
                                 if k not in {"segments", "speakers"}})
                         if time.monotonic() - last_poll >= self.settings.room_poll_seconds:
                             current = await self.client.resolve_room(self.room.room_id)
+                            if not self.session_active(sid):
+                                break
                             last_poll = time.monotonic()
                             self.room = current
                             if current.live_status != 1:
@@ -725,6 +953,8 @@ class Workspace:
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
+                if not self.session_active(sid):
+                    return
                 self.session.update(status="connecting", error=self.safe_error(exc))
                 self.playback["ready"] = False
                 await self.emit("error", {"source": "video", "message": self.session["error"]})
@@ -735,7 +965,7 @@ class Workspace:
     async def _danmaku_loop(self, sid):
         try:
             async for event in self.client.events(self.room.room_id):
-                if not self.session or self.session["id"] != sid:
+                if not self.session_active(sid):
                     break
                 kind = event.get("type", "danmaku")
                 if kind == "danmaku":
@@ -755,6 +985,8 @@ class Workspace:
         except asyncio.CancelledError:
             raise
         except Exception as exc:
+            if not self.session_active(sid):
+                return
             self.danmaku_status = {"status": "error", "reason": self.safe_error(exc)}
             await self.emit("error", {"source": "danmaku", "message": self.safe_error(exc)})
             await self.state()
@@ -767,9 +999,11 @@ class Workspace:
                 text = text.replace(secret, "[private]")
         return text[:400]
 
+    @_fence_session_change
     async def close(self):
         # Process shutdown preserves the active-session pointer. Only the
         # browser's explicit Disconnect prevents reconnection on the next boot.
+        self.local_danmaku.disconnect()
         async with self.lock:
             await self._stop()
         if self._corpus_task:
@@ -823,7 +1057,9 @@ def create_app(settings=None):
     @app.post("/api/session")
     async def start_session(payload: SessionRequest):
         try:
-            return await workspace.start(payload.room)
+            return await workspace.start(payload.room, candidate_count=payload.candidate_count,
+                                         candidate_only=payload.candidate_only,
+                                         allow_manual_send=payload.allow_manual_send)
         except (ValueError, RuntimeError) as exc:
             raise HTTPException(400, workspace.safe_error(exc)) from exc
         except Exception as exc:
@@ -831,10 +1067,24 @@ def create_app(settings=None):
 
     @app.post("/api/session/stop")
     async def stop_session():
-        return await workspace.stop()
+        try:
+            return await workspace.stop()
+        except RuntimeError as exc:
+            raise HTTPException(503, str(exc)) from exc
+
+    @app.post("/api/session/danmaku-policy")
+    async def update_danmaku_policy(payload: DanmakuPolicyRequest):
+        try:
+            return await workspace.set_danmaku_policy(payload.session_id, payload.allow_manual_send)
+        except DanmakuSendError as exc:
+            return JSONResponse({"detail": str(exc), "code": exc.code}, status_code=exc.status_code)
+        except OSError:
+            return JSONResponse({"detail": "无法保存发送策略，权限未更改。", "code": "storage_unavailable"}, status_code=503)
 
     @app.post("/api/danmaku/credentials")
     async def save_danmaku_credentials(request: Request):
+        if workspace.danmaku_transport == "local" or workspace.pending_danmaku_transport_updates:
+            raise HTTPException(409, "本机发送模式请在自己电脑的助手中配置 Cookie，不要上传到服务器。")
         # Parse this secret separately: ordinary validation errors may echo the
         # rejected input. Neither success nor failure returns cookie contents.
         body = bytearray()
@@ -850,6 +1100,8 @@ def create_app(settings=None):
         except (ValueError, TypeError):
             raise HTTPException(400, "请提供有效的 Cookie 文本。") from None
         async with workspace.lock:
+            if workspace.danmaku_transport == "local" or workspace.pending_danmaku_transport_updates:
+                raise HTTPException(409, "本机发送模式请在自己电脑的助手中配置 Cookie，不要上传到服务器。")
             try:
                 if cookie.strip():
                     workspace.danmaku_credentials.save(cookie)
@@ -866,11 +1118,127 @@ def create_app(settings=None):
 
     @app.post("/api/danmaku/send")
     async def send_danmaku(payload: DanmakuRequest):
-        async with workspace.lock:
+        transport = workspace.danmaku_transport
+        lock = workspace.local_danmaku_send_lock if transport == "local" else workspace.lock
+        async with lock:
             try:
+                if transport != workspace.danmaku_transport:
+                    raise DanmakuSendError("发送方式已更改，请检查后重新操作。", 409, "trial_stopped")
                 return await workspace._send_danmaku_locked(payload.session_id, payload.text)
             except DanmakuSendError as exc:
-                raise HTTPException(exc.status_code, str(exc)) from None
+                return JSONResponse({"detail": str(exc), "code": exc.code}, status_code=exc.status_code)
+
+    def local_error(exc):
+        return JSONResponse({"detail": str(exc), "code": exc.code}, status_code=exc.status_code,
+                            headers={"Cache-Control": "no-store"})
+
+    def require_local():
+        if workspace.danmaku_transport != "local" or workspace.pending_danmaku_transport_updates:
+            raise DanmakuSendError("请先在网页切换为本机发送模式。", 409, "local_mode_required")
+
+    def helper_token(request):
+        authorization = request.headers.get("authorization", "")
+        return authorization[7:] if authorization.startswith("Bearer ") else None
+
+    async def helper_body(request, fields):
+        # Do not use model validation for pairing secrets: its error payload can
+        # include rejected input. Unknown fields are never reflected or stored.
+        body = bytearray()
+        async for part in request.stream():
+            body.extend(part)
+            if len(body) > 8192:
+                raise DanmakuSendError("本机助手请求格式无效。", 400, "local_protocol_error")
+        try:
+            payload = json.loads(body)
+        except (ValueError, UnicodeError):
+            raise DanmakuSendError("本机助手请求格式无效。", 400, "local_protocol_error") from None
+        if not isinstance(payload, dict) or set(payload) - fields:
+            raise DanmakuSendError("本机助手请求格式无效。", 400, "local_protocol_error")
+        return payload
+
+    @app.post("/api/danmaku/transport")
+    async def danmaku_transport(payload: DanmakuTransportRequest):
+        try:
+            return await workspace.set_danmaku_transport(payload.mode)
+        except OSError:
+            return local_error(DanmakuSendError("无法保存发送方式，请检查本地数据目录。", 503, "storage_unavailable"))
+
+    @app.post("/api/danmaku/local/pairing")
+    async def local_pairing():
+        try:
+            require_local()
+            return JSONResponse(workspace.local_danmaku.pairing(), headers={"Cache-Control": "no-store"})
+        except DanmakuSendError as exc:
+            return local_error(exc)
+
+    @app.post("/api/danmaku/local/connect")
+    async def local_connect(request: Request):
+        try:
+            payload = await helper_body(request, {"code"})
+            require_local()
+            result = workspace.local_danmaku.connect(payload.get("code"))
+            await workspace.danmaku_auto.stop("本机助手连接已更新，请手动启动一键融入")
+            await workspace.emit("danmaku_send_status", workspace.danmaku_send_status())
+            return JSONResponse(result, headers={"Cache-Control": "no-store"})
+        except DanmakuSendError as exc:
+            return local_error(exc)
+
+    @app.post("/api/danmaku/local/poll")
+    async def local_poll(request: Request):
+        try:
+            require_local()
+            workspace.require_danmaku_send_enabled()
+            return JSONResponse(workspace.local_danmaku.poll(helper_token(request)), headers={"Cache-Control": "no-store"})
+        except DanmakuSendError as exc:
+            return local_error(exc)
+
+    @app.post("/api/danmaku/local/authorize")
+    async def local_authorize(request: Request):
+        try:
+            payload = await helper_body(request, {"job_id"})
+            require_local()
+            workspace.require_danmaku_send_enabled()
+            # The pending send may own its send lock. Never acquire the global
+            # workspace lock here; authorization only executes synchronous guards.
+            return workspace.local_danmaku.authorize(helper_token(request), payload.get("job_id"))
+        except DanmakuSendError as exc:
+            return local_error(exc)
+
+    @app.post("/api/danmaku/local/result")
+    async def local_result(request: Request):
+        try:
+            payload = await helper_body(request, {"job_id", "outcome", "code", "receipt"})
+            require_local()
+            if not isinstance(payload.get("outcome"), str) or not isinstance(payload.get("code"), str):
+                raise DanmakuSendError("本机助手回执格式无效。", 400, "local_protocol_error")
+            result = workspace.local_danmaku.result(helper_token(request), payload.get("job_id"),
+                                                   payload["outcome"], payload["code"], payload.get("receipt"))
+            await workspace.emit("danmaku_send_status", workspace.danmaku_send_status())
+            return result
+        except DanmakuSendError as exc:
+            return local_error(exc)
+
+    @app.post("/api/danmaku/local/disconnect")
+    async def local_disconnect():
+        workspace.local_danmaku.disconnect()
+        await workspace.danmaku_auto.stop("本机助手已断开")
+        status = workspace.danmaku_send_status()
+        await workspace.emit("danmaku_send_status", status)
+        return status
+
+    @app.get("/api/danmaku/local/download")
+    async def local_download():
+        from .local_sender_bundle import build_local_sender_bundle
+        return Response(build_local_sender_bundle(), media_type="application/zip",
+                        headers={"Content-Disposition": 'attachment; filename="ai-tongdan-local-sender.zip"',
+                                 "Cache-Control": "no-store"})
+
+    @app.get("/api/danmaku/local/guide")
+    async def local_guide():
+        path = ROOT / "docs" / "local-sender.md"
+        if not path.is_file():
+            raise HTTPException(404, "本机助手使用指南暂不可用。")
+        return FileResponse(path, media_type="text/plain; charset=utf-8", headers={"Cache-Control": "no-store"})
 
     @app.post("/api/danmaku/style")
     async def update_danmaku_style(payload: DanmakuStyleRequest):
@@ -893,11 +1261,12 @@ def create_app(settings=None):
     async def start_auto_danmaku(payload: AutoDanmakuRequest):
         async with workspace.lock:
             try:
+                workspace.require_danmaku_send_enabled("auto")
                 return await workspace.danmaku_auto.start(
                     payload.session_id, interval_seconds=payload.interval_seconds,
                     max_messages=payload.max_messages)
             except DanmakuSendError as exc:
-                raise HTTPException(exc.status_code, str(exc)) from None
+                return JSONResponse({"detail": str(exc), "code": exc.code}, status_code=exc.status_code)
 
     @app.post("/api/danmaku/auto/stop")
     async def stop_auto_danmaku(payload: AutoDanmakuStopRequest):
@@ -905,6 +1274,7 @@ def create_app(settings=None):
         # not start a POST after the user has already pressed Stop.
         if workspace.session and payload.session_id == workspace.session["id"]:
             workspace.danmaku_auto.stop_requested = True
+            workspace.local_danmaku.cancel(source="auto")
         async with workspace.lock:
             if not workspace.session or payload.session_id != workspace.session["id"]:
                 raise HTTPException(409, "直播会话已变更，请刷新当前房间。")
@@ -915,7 +1285,7 @@ def create_app(settings=None):
         async with workspace.lock:
             if not workspace.session or payload.session_id != workspace.session["id"]:
                 raise HTTPException(409, "直播会话已变更，请重新提问。")
-            if workspace.session["status"] == "stopped":
+            if not workspace.session_active(payload.session_id):
                 raise HTTPException(409, "请先连接直播间。")
             if not payload.text.strip():
                 raise HTTPException(400, "请输入问题。")
@@ -939,7 +1309,7 @@ def create_app(settings=None):
     def validate_audio_session(sid):
         if not workspace.session or sid != workspace.session["id"]:
             raise HTTPException(409, "直播会话已变更，请重新操作。")
-        if workspace.session["status"] == "stopped" or not workspace.audio:
+        if not workspace.session_active(sid) or not workspace.audio:
             raise HTTPException(409, "请先连接直播间。")
 
     @app.post("/api/audio/segments/{segment_id}/label")
@@ -1029,6 +1399,8 @@ def create_app(settings=None):
         path = workspace.settings.data_dir / "sessions" / sid / "media" / generation / filename
         if not path.is_file():
             raise HTTPException(404)
+        if filename == "index.m3u8" and path.stat().st_size == 0:
+            raise HTTPException(503, "直播播放列表尚未就绪。", headers={"Retry-After": "2"})
         return FileResponse(path, media_type="application/vnd.apple.mpegurl" if filename.endswith("m3u8") else "video/mp2t",
                             headers={"Cache-Control": "no-store"})
 

@@ -36,6 +36,25 @@ class BilibiliError(RuntimeError):
     """A sanitized, actionable upstream error without tokens or cookies."""
 
 
+async def _cancellable_wait(awaitable, timeout):
+    """Preserve caller cancellation when a receive completes at the same time.
+
+    Python 3.10's asyncio.wait_for can return the inner result in that race,
+    swallowing the cancellation that should end a room's receive loop.
+    """
+    task = asyncio.ensure_future(awaitable)
+    try:
+        done, _ = await asyncio.wait({task}, timeout=timeout)
+        if not done:
+            raise asyncio.TimeoutError
+        return task.result()
+    finally:
+        if not task.done():
+            task.cancel()
+            with suppress(asyncio.CancelledError):
+                await task
+
+
 @dataclass(frozen=True)
 class RoomInfo:
     room_id: int
@@ -355,7 +374,7 @@ class BilibiliClient:
                     if not authenticated and time.monotonic() >= auth_deadline:
                         raise BilibiliError("弹幕认证超时")
                     timeout = 70 if authenticated else max(0.01, auth_deadline - time.monotonic())
-                    message = await asyncio.wait_for(socket.recv(), timeout=timeout)
+                    message = await _cancellable_wait(socket.recv(), timeout=timeout)
                     if not isinstance(message, bytes):
                         continue
                     for operation, payload in decode_packets(message):
@@ -388,7 +407,7 @@ class BilibiliClient:
                        "reason": reason, "retry_in": delay, "received_at": time.time()}
                 attempt += 1
                 try:
-                    await asyncio.wait_for(self._closed.wait(), timeout=delay)
+                    await _cancellable_wait(self._closed.wait(), timeout=delay)
                 except asyncio.TimeoutError:
                     pass
             finally:

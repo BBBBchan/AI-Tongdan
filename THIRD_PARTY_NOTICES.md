@@ -4,10 +4,12 @@ AI同担 is maintained by **BBBBchan**. The application and documentation contri
 
 Third-party components retain their own attribution and licenses. The project's noncommercial license does not replace the licenses of independently licensed components, dependencies or model weights.
 
+The source is available for noncommercial use. CC BY-NC 4.0 includes a noncommercial restriction and is not an OSI-approved open-source license; see the [Open Source Definition](https://opensource.org/osd).
+
 ## DeltaStreamer
 
 - Source: [BBBBchan/DeltaStreamer](https://github.com/BBBBchan/DeltaStreamer).
-- Availability: the upstream repository is currently private; a public release is planned.
+- Availability: the upstream repository is public.
 - Project page: <https://bbbbchan.github.io/DeltaStreamer/>.
 - Source commit: `b60625d8f14f7622c504b642178ec8be07a00e4d`.
 - License: [CC BY-NC 4.0](vendor/deltastreamer/LICENSE).
@@ -22,7 +24,7 @@ The following files were copied unchanged. Original relative paths and SHA256 ch
 
 AI同担 adds the Bilibili connection, continuous asynchronous observations and repeated Q&A, audio processing and manual source labels, time-aligned memory updates, danmaku suggestions and sending, browser UI, persistence, deployment scripts and tests. These application extensions are distinct from the three unchanged upstream memory files.
 
-The paper **DeltaStreamer: Towards Human-Like Agentic Streaming Video Understanding** is by Boyuan Sun, Deshui Miao, Wenzhao Gao, Shaoyong Jia, Shaohui Jiao, Chi Liu, Yan Shu, Derek Li, Bryan Dai, Shengsheng Qian and Qibin Hou (2026). Its complete citation is at the bottom of [README.md](README.md#citation). Paper authorship and upstream attribution are independent of this repository's Git contribution history.
+The paper **[DeltaStreamer: Towards Human-Like Agentic Streaming Video Understanding](https://arxiv.org/abs/2610.19849)** is by Boyuan Sun, Deshui Miao, Wenzhao Gao, Shaoyong Jia, Shaohui Jiao, Chi Liu, Yan Shu, Derek Li, Bryan Dai, Shengsheng Qian and Qibin Hou (2026), arXiv:2610.19849. Its complete citation is at the bottom of [README.md](README.md#citation). Paper authorship and upstream attribution are independent of this repository's Git contribution history.
 
 ## HLS.js
 

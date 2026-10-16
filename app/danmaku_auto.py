@@ -12,6 +12,8 @@ import time
 from contextlib import suppress
 
 from .danmaku_chorus import detect_choruses
+from .danmaku_candidates import candidate_context, music_reply_disallowed
+from .danmaku_corpus import is_common_reaction
 from .danmaku_send import DanmakuSendError, MAX_DANMAKU_LENGTH
 
 
@@ -49,13 +51,27 @@ class AutoDanmaku:
         self._persist()
         await self.workspace.emit("danmaku_auto", self.snapshot())
 
+    def _require_send_enabled(self):
+        ws = self.workspace
+        guard = getattr(ws, "require_danmaku_send_enabled", None)
+        if guard is not None:
+            guard("auto")
+        elif ws.session and ws.session.get("candidate_only", False):
+            if ws.session.get("allow_manual_send") is True:
+                raise DanmakuSendError("仅手动发送，自动发送已禁用", 409, "auto_send_disabled")
+            raise DanmakuSendError("当前会话只生成候选，不发送弹幕。", 409, "candidate_only")
+
     async def start(self, session_id, interval_seconds=300, max_messages=6):
         ws = self.workspace
+        self._require_send_enabled()
         if not ws.session or ws.session["id"] != session_id:
             raise DanmakuSendError("直播会话已变更，请在当前房间重新启动。", 409)
         if not ws.room or ws.room.live_status != 1 or ws.session["status"] != "live":
             raise DanmakuSendError("请先连接正在直播的房间。", 409)
-        if not ws.danmaku_credentials.status()["configured"]:
+        if getattr(ws, "danmaku_transport", "server") == "local":
+            if not ws.local_danmaku.connected:
+                raise DanmakuSendError("请先连接自己电脑上的发送助手。", 409, "local_disconnected")
+        elif not ws.danmaku_credentials.status()["configured"]:
             raise DanmakuSendError("请先配置本人弹幕登录。", 401)
         if type(interval_seconds) is not int or not 5 <= interval_seconds <= 3600:
             raise DanmakuSendError("发送间隔请输入 5–3600 秒的整数。")
@@ -90,6 +106,9 @@ class AutoDanmaku:
 
     async def stop(self, reason="已手动停止"):
         self.stop_requested = True
+        local = getattr(self.workspace, "local_danmaku", None)
+        if local is not None:
+            local.cancel(source="auto")
         if self.data["status"] == "active":
             self.data.update(status="stopped", reason=reason, next_send_at=None, next_interval_seconds=None)
             task, self.task = self.task, None
@@ -160,7 +179,7 @@ class AutoDanmaku:
             except UnicodeError:
                 continue
             if (1 <= length <= MAX_DANMAKU_LENGTH and not any(ord(c) < 32 or ord(c) == 127 for c in text)
-                    and text not in sent and text not in audience):
+                    and text not in sent and (text not in audience or is_common_reaction(text))):
                 choices.append({"text": text, "kind": "ai", "generated_at": generated,
                                 "style_revision": candidates["style_revision"]})
         return choices
@@ -190,10 +209,15 @@ class AutoDanmaku:
             return []
         sent = self._recently_sent_texts()
         choices = self._ai_choices(sent) + self._chorus_choices(sent)
+        # The raw chorus panel remains an honest audience record, but automatic
+        # selections must respect the same listener preference as AI drafts.
+        snapshot = getattr(self.workspace, "snapshot", None)
+        context = candidate_context(snapshot(), source_time=time.monotonic() - self.workspace.clock_start) \
+            if choices and callable(snapshot) else {}
         # Keep the random pool uniform by actual message, not repeated cards.
         result, seen = [], set()
         for item in choices:
-            if item["text"] not in seen:
+            if item["text"] not in seen and not music_reply_disallowed(item["text"], context):
                 result.append(item)
                 seen.add(item["text"])
         return result
@@ -217,6 +241,11 @@ class AutoDanmaku:
         ws = self.workspace
         if self.data["status"] != "active":
             return
+        try:
+            self._require_send_enabled()
+        except DanmakuSendError as exc:
+            await self.finish("stopped", str(exc))
+            return
         if self.stop_requested:
             await self.finish("stopped", "已手动停止")
             return
@@ -225,6 +254,9 @@ class AutoDanmaku:
             return
         if ws.room.live_status != 1 or ws.session["status"] != "live":
             await self.finish("stopped", "直播已结束或连接中断")
+            return
+        if getattr(ws, "danmaku_transport", "server") == "local" and not ws.local_danmaku.connected:
+            await self.finish("error", "本机发送助手已断开，已停止", "请重新连接本机助手后手动启动。")
             return
         now = time.monotonic()
         if self.data["sent_count"] >= self.data["max_messages"]:
@@ -275,6 +307,7 @@ class AutoDanmaku:
         def before_post():
             # Authentication may await a slow upstream GET. Check again at the
             # actual POST boundary, without an await between check and POST.
+            self._require_send_enabled()
             if (self.stop_requested or self.data["status"] != "active"
                     or not ws.session or ws.session["id"] != self.data["session_id"]
                     or not ws.room or ws.room.room_id != self.data["room_id"]
@@ -313,12 +346,25 @@ class AutoDanmaku:
     async def run(self):
         try:
             while self.data["status"] == "active":
-                async with self.workspace.lock:
+                mode = getattr(self.workspace, "danmaku_transport", "server")
+                lock = self.workspace.local_danmaku_send_lock if mode == "local" else self.workspace.lock
+                async with lock:
+                    if mode != getattr(self.workspace, "danmaku_transport", "server"):
+                        continue
                     await self.tick()
                 if self.data["status"] != "active":
                     break
                 await asyncio.sleep(max(.1, min(2, self.next_due - time.monotonic())))
         except asyncio.CancelledError:
+            # A local helper may already hold a three-second POST permit. Stop
+            # retires the job, but cannot retract a request already in flight.
+            if getattr(self.workspace, "danmaku_transport", "server") == "local":
+                receipt = self.workspace.local_danmaku.last_receipt or {}
+                for entry in self.data["history"][-1:]:
+                    if entry.get("status") == "pending":
+                        uncertain = receipt.get("outcome") in {"unknown", "accepted"}
+                        entry.update(status="unknown" if uncertain else "not_sent",
+                                     code="send_unknown" if uncertain else "trial_stopped")
             raise
         except Exception:
             self.data.update(status="error", reason="一键融入已停止", error="处理异常，未自动重试，请检查发送记录。", next_send_at=None, next_interval_seconds=None)

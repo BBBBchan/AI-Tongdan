@@ -51,7 +51,9 @@ async def test_danmaku_credentials_private_and_send_bound_to_active_room(tmp_pat
     await workspace.client.aclose()
     workspace.client = FakeBilibili()
     calls = []
-    async def send(room, text):
+    async def send(room, text, *, before_post=None):
+        if before_post is not None:
+            before_post()
         calls.append((room, text))
         return {"sent": True, "message": "Bilibili 已受理发送请求"}
     workspace.danmaku_sender.send = send
@@ -96,7 +98,7 @@ async def test_danmaku_credentials_private_and_send_bound_to_active_room(tmp_pat
             assert duplicate.status_code == 429 and len(calls) == 1
             assert list(workspace.sent_danmaku) == successful
             workspace.last_danmaku_sent_at = None
-            async def rejected(*_):
+            async def rejected(*_, **kwargs):
                 raise DanmakuSendError("请更新本人登录状态。", 401, "login_required")
             workspace.danmaku_sender.send = rejected
             expired = await client.post("/api/danmaku/send", json={"session_id": sid, "text": "测试草稿"})
@@ -119,6 +121,53 @@ async def test_danmaku_credentials_private_and_send_bound_to_active_room(tmp_pat
             assert changed.json()["sent_danmaku"] == []
             assert changed.json()["danmaku_auto"]["status"] == "idle"
             assert changed.json()["danmaku_auto"]["last_text"] is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("code, status_code, outcome", [
+    ("send_unknown", 409, "unknown"),
+    ("wealth_level_required", 403, "rejected"),
+])
+async def test_manual_send_preserves_receipt_and_error_code_without_retry(
+        tmp_path, clean_model_env, monkeypatch, code, status_code, outcome):
+    app = create_app(Settings(tmp_path, "ffmpeg"))
+    workspace = app.state.workspace
+    await workspace.client.aclose()
+    workspace.client = FakeBilibili()
+    # Older adapters and test doubles may not provide receipt metadata.
+    monkeypatch.delattr(workspace.danmaku_sender, "last_receipt", raising=False)
+    assert workspace.danmaku_send_status()["last_receipt"] is None
+    calls = []
+    receipt = {"phase": "send", "outcome": outcome, "message_kind": code,
+               "http_status": 200, "platform_code": 0, "updated_at": 123.0}
+    detail = "发送结果暂不确定，请先核对直播间。" if code == "send_unknown" else "未达到本直播间发送要求。"
+
+    async def unsuccessful(room, text, *, before_post=None):
+        if before_post is not None:
+            before_post()
+        calls.append((room, text))
+        workspace.danmaku_sender.last_receipt = dict(receipt)
+        raise DanmakuSendError(detail, status_code, code)
+
+    monkeypatch.setattr(workspace.danmaku_sender, "send", unsuccessful)
+    async with app.router.lifespan_context(app):
+        await workspace.start("510")
+        await asyncio.sleep(.02)
+        workspace.room = replace(workspace.room, live_status=1)
+        sid = workspace.session["id"]
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://local") as client:
+            response = await client.post("/api/danmaku/send", json={"session_id": sid, "text": "保留这份草稿"})
+            assert response.status_code == status_code
+            assert response.json() == {"detail": detail, "code": code}
+            assert calls == [(80397, "保留这份草稿")]
+            assert not workspace.sent_danmaku
+            assert workspace.last_danmaku_sent_at is None
+            status = (await client.get("/api/state")).json()["danmaku_send"]
+            assert status["last_receipt"] == receipt
+            assert status["error"] == detail
+            events = [event for event in workspace.bus.history if event["type"] == "danmaku_send_status"]
+            assert events[-1]["data"]["last_receipt"] == receipt
+            assert not any(event["type"] == "sent_danmaku" for event in workspace.bus.history)
 
 
 @pytest.mark.asyncio

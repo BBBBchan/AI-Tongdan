@@ -128,9 +128,9 @@ async def test_expired_login_never_posts(tmp_path):
     ({"code": -111, "msg": COOKIE}, 401, "login_required"),
     ({"code": 1990000, "msg": COOKIE}, 409, "verification_required"),
     ({"code": 10031, "msg": COOKIE}, 409, "platform_rejected"),
-    ({"code": 0, "msg": "f:频率限制 " + COOKIE}, 409, "platform_rejected"),
-    ({"code": True, "msg": COOKIE}, 502, "invalid_response"),
-    ([COOKIE], 502, "invalid_response"),
+    ({"code": 0, "msg": "f:频率限制 " + COOKIE}, 429, "rate_limited"),
+    ({"code": True, "msg": COOKIE}, 502, "send_unknown"),
+    ([COOKIE], 502, "send_unknown"),
 ])
 async def test_upstream_rejections_are_sanitized_and_not_retried(tmp_path, payload, status_code, code):
     posts = []
@@ -218,3 +218,346 @@ async def test_valid_trial_guard_runs_once_between_get_and_post(tmp_path):
         result = await sender.send(732, "你好", before_post=before_post)
     assert result["sent"] is True
     assert calls == ["GET", "guard", "POST"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("markers", [
+    {"msg": "f", "message": "f"}, {"msg": "f"}, {"message": "f"},
+    {"msg": "f", "message": "0"}, {"msg": "0", "message": "f"},
+    {"msg": " f ", "message": 0}, {"msg": "", "message": "f"},
+    {"msg": "f", "message": "unexplained " + COOKIE},
+])
+async def test_short_f_notice_is_specific_but_delivery_remains_unknown(tmp_path, markers):
+    calls = []
+
+    def handle(request):
+        calls.append(request.method)
+        return httpx.Response(200, json=NAV if request.method == "GET" else {"code": 0, **markers})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handle)) as client:
+        sender = DanmakuSender(DanmakuCredentials(tmp_path, COOKIE), client)
+        with pytest.raises(DanmakuSendError) as error:
+            await sender.send(732, "你好")
+    assert calls == ["GET", "POST"]
+    assert error.value.code == "send_unknown" and error.value.status_code == 409
+    assert str(error.value) == "Bilibili 返回提示 f，弹幕尚未确认送达；平台未说明具体原因，请勿连续重发。"
+    assert sender.last_receipt["message_kind"] == "platform_f_notice"
+    assert sender.last_receipt["outcome"] == "unknown"
+    assert sender.last_receipt["phase"] == "send"
+    assert sender.last_receipt["http_status"] == 200 and sender.last_receipt["platform_code"] == 0
+    assert "secret" not in json.dumps(sender.last_receipt) + str(error.value)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("platform_code, markers, kind, status", [
+    (0, {"msg": "f", "message": "f:发送频率过快"}, "rate_limited", 429),
+    (0, {"msg": "f:未公开的拒绝原因", "message": "f"}, "platform_rejected", 409),
+    (0, {"msg": "f", "message": "用户等级不足"}, "level_required", 409),
+    (-1, {"msg": "f", "message": "f"}, "platform_rejected", 409),
+])
+async def test_explicit_rejection_takes_priority_over_short_f(tmp_path, platform_code, markers, kind, status):
+    calls = []
+
+    def handle(request):
+        calls.append(request.method)
+        return httpx.Response(200, json=NAV if request.method == "GET" else {"code": platform_code, **markers})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handle)) as client:
+        sender = DanmakuSender(DanmakuCredentials(tmp_path, COOKIE), client)
+        with pytest.raises(DanmakuSendError) as error:
+            await sender.send(732, "你好")
+    assert calls == ["GET", "POST"]
+    assert error.value.code == kind and error.value.status_code == status
+    assert sender.last_receipt["outcome"] == "rejected"
+    assert sender.last_receipt["message_kind"] == kind
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("markers", [
+    {"message": "0"}, {"msg": "0", "message": "0"},
+    {"msg": "", "message": "0"}, {"msg": "0", "message": "success"},
+    {"msg": " 0 ", "message": "OK"}, {"msg": 0, "message": None},
+    {"msg": "成功", "message": "发送成功"},
+])
+async def test_success_markers_match_official_web_acceptance(tmp_path, markers):
+    calls = []
+    def handle(request):
+        calls.append(request.method)
+        return httpx.Response(200, json=NAV if request.method == "GET" else {"code": 0, **markers})
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handle)) as client:
+        sender = DanmakuSender(DanmakuCredentials(tmp_path, COOKIE), client)
+        result = await sender.send(732, "你好")
+    assert result["sent"] is True
+    assert calls == ["GET", "POST"]
+    receipt = sender.last_receipt
+    assert receipt["phase"] == "send"
+    assert receipt["outcome"] == "accepted"
+    assert receipt["message_kind"] == "success"
+    assert receipt["platform_code"] == 0 and receipt["http_status"] == 200
+    assert set(receipt) == {"phase", "outcome", "message_kind", "platform_code", "http_status", "updated_at"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("platform_code,message,kind,status", [
+    (0, "f:本房间要求荣耀等级达到1级才可发言", "wealth_level_required", 409),
+    (10031, "用户等级不足", "level_required", 409),
+    (0, "f:您已被禁言", "room_muted", 409),
+    (0, "f:发送频率过快", "rate_limited", 429),
+    (0, "f:请完成验证码", "verification_required", 409),
+    (0, "f:风控校验失败", "verification_required", 409),
+    (0, "f:登录已经过期", "login_required", 401),
+    (0, "f:未公开的拒绝原因", "platform_rejected", 409),
+])
+async def test_explicit_rejection_is_classified_without_echoing_upstream(tmp_path, platform_code, message, kind, status):
+    posts = []
+    def handle(request):
+        if request.method == "GET":
+            return httpx.Response(200, json=NAV)
+        posts.append(request)
+        return httpx.Response(200, json={"code": platform_code, "msg": "0", "message": message + " " + COOKIE,
+                                         "data": {"uid": 123, "extra": COOKIE}})
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handle)) as client:
+        sender = DanmakuSender(DanmakuCredentials(tmp_path, COOKIE), client)
+        with pytest.raises(DanmakuSendError) as error:
+            await sender.send(732, "你好")
+    assert len(posts) == 1
+    assert error.value.code == kind and error.value.status_code == status
+    assert sender.last_receipt["message_kind"] == kind
+    assert sender.last_receipt["outcome"] == "rejected"
+    assert sender.last_receipt["platform_code"] == platform_code
+    public = json.dumps(sender.last_receipt, ensure_ascii=False) + str(error.value)
+    assert COOKIE not in public and "secret" not in public and "uid" not in public
+    assert "你好" not in public
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("markers", [
+    {"message": "未公开的提示 " + COOKIE},
+    {"msg": "success", "message": "未公开的提示 " + COOKIE},
+    {"msg": "未公开的提示 " + COOKIE, "message": "0"},
+    {"message": {"secret": COOKIE}}, {"message": [COOKIE]}, {"message": False},
+    {"message": "验证码验证已通过"}, {"message": "风控校验成功"},
+    {"message": "荣耀等级已经达到1级"}, {"message": "发送频率正常"},
+    {"msg": "coffee"}, {"message": "friendly"}, {"msg": "ff", "message": "0"},
+    {"message": "f f"},
+])
+async def test_unknown_code_zero_notice_is_uncertain_and_never_retried(tmp_path, markers):
+    calls = []
+    def handle(request):
+        calls.append(request.method)
+        return httpx.Response(200, json=NAV if request.method == "GET" else {"code": 0, **markers})
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handle)) as client:
+        sender = DanmakuSender(DanmakuCredentials(tmp_path, COOKIE), client)
+        with pytest.raises(DanmakuSendError) as error:
+            await sender.send(732, "你好")
+    assert calls == ["GET", "POST"]
+    assert error.value.code == "send_unknown" and error.value.status_code == 409
+    assert "暂不确定" in str(error.value) and "官方直播间" in str(error.value)
+    assert sender.last_receipt["outcome"] == "unknown"
+    assert sender.last_receipt["message_kind"] == "unknown_message"
+    assert sender.last_receipt["platform_code"] == 0
+    assert "secret" not in json.dumps(sender.last_receipt) + str(error.value)
+
+
+@pytest.mark.asyncio
+async def test_receipt_resets_and_nav_failures_never_claim_posted(tmp_path):
+    logged_in = True
+    calls = []
+    def handle(request):
+        calls.append(request.method)
+        if request.method == "GET":
+            return httpx.Response(200, json=NAV if logged_in else {"code": -101, "message": COOKIE})
+        return httpx.Response(200, json={"code": 0, "message": "0"})
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handle)) as client:
+        sender = DanmakuSender(DanmakuCredentials(tmp_path, COOKIE), client)
+        assert sender.last_receipt is None
+        await sender.send(732, "你好")
+        first_receipt = sender.last_receipt.copy()
+        logged_in = False
+        with pytest.raises(DanmakuSendError):
+            await sender.send(732, "你好")
+        assert first_receipt["outcome"] == "accepted"
+        assert sender.last_receipt["phase"] == "nav"
+        assert sender.last_receipt["outcome"] == "rejected"
+        assert sender.last_receipt["message_kind"] == "login_required"
+        assert sender.last_receipt["platform_code"] == -101
+        with pytest.raises(DanmakuSendError):
+            await sender.send(732, "")
+        assert sender.last_receipt["phase"] == "validation"
+        assert sender.last_receipt["platform_code"] is None
+        assert sender.last_receipt["http_status"] is None
+    assert calls == ["GET", "POST", "GET"]
+
+
+@pytest.mark.asyncio
+async def test_receipt_on_post_timeout_is_unknown_without_nav_success_code(tmp_path):
+    def handle(request):
+        if request.method == "GET":
+            return httpx.Response(200, json=NAV)
+        raise httpx.ReadTimeout(COOKIE, request=request)
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handle)) as client:
+        sender = DanmakuSender(DanmakuCredentials(tmp_path, COOKIE), client)
+        with pytest.raises(DanmakuSendError):
+            await sender.send(732, "你好")
+    assert sender.last_receipt["phase"] == "send"
+    assert sender.last_receipt["outcome"] == "unknown"
+    assert sender.last_receipt["platform_code"] is None
+    assert sender.last_receipt["http_status"] is None
+    assert "secret" not in json.dumps(sender.last_receipt)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status,content,kind", [
+    (200, b"not json", "invalid_response"),
+    (503, b"upstream unavailable", "platform_unavailable"),
+])
+async def test_abnormal_post_response_is_uncertain_and_safe(tmp_path, status, content, kind):
+    calls = []
+    def handle(request):
+        calls.append(request.method)
+        if request.method == "GET":
+            return httpx.Response(200, json=NAV)
+        return httpx.Response(status, content=content + COOKIE.encode())
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handle)) as client:
+        sender = DanmakuSender(DanmakuCredentials(tmp_path, COOKIE), client)
+        with pytest.raises(DanmakuSendError) as error:
+            await sender.send(732, "你好")
+    assert error.value.code == "send_unknown"
+    assert sender.last_receipt["message_kind"] == kind
+    assert sender.last_receipt["outcome"] == "unknown"
+    assert sender.last_receipt["http_status"] == status
+    assert sender.last_receipt["platform_code"] is None
+    assert calls == ["GET", "POST"]
+    assert "secret" not in str(error.value) + json.dumps(sender.last_receipt)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("message,expected,kind", [
+    ("k", "k", "send_unknown"),
+    ("f:发送频率过快", "f:发送频率过快", "rate_limited"),
+    ("f:本房间要求荣耀等级达到1级才能发言", "f:本房间要求荣耀等级达到1级才能发言", "wealth_level_required"),
+])
+async def test_private_diagnostic_preserves_short_hint_without_changing_result(tmp_path, message, expected, kind):
+    calls = []
+    def handle(request):
+        calls.append(request.method)
+        return httpx.Response(200, json=NAV if request.method == "GET" else {"code": 0, "msg": message,
+                                                                          "data": {"secret": COOKIE}})
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handle)) as client:
+        sender = DanmakuSender(DanmakuCredentials(tmp_path, COOKIE), client)
+        with pytest.raises(DanmakuSendError) as error:
+            await sender.send(732, "你好")
+    assert error.value.code == kind
+    path = tmp_path / "bilibili_send_diagnostic.private.json"
+    assert stat.S_IMODE(path.stat().st_mode) == 0o600
+    diagnostic = json.loads(path.read_text())
+    assert diagnostic["msg"] == {"type": "string", "preview": expected}
+    assert diagnostic["message"] == {"type": "missing"}
+    assert diagnostic["has_data"] is True and diagnostic["data_type"] == "object"
+    assert diagnostic["http_status"] == 200 and diagnostic["code"] == 0
+    assert diagnostic["parse_status"] == "parsed" and diagnostic["updated_at"] > 0
+    assert "preview" not in json.dumps(sender.last_receipt)
+    assert "secret" not in path.read_text()
+    assert calls == ["GET", "POST"]
+
+
+@pytest.mark.asyncio
+async def test_private_diagnostic_masks_credentials_account_text_urls_and_ids(tmp_path):
+    cookie = COOKIE + "; opaque_flag=small-private-value"
+    nav = {**NAV, "data": {**NAV["data"], "mid": 321, "uname": "私密昵称甲"}}
+    text = "不保存提交正文"
+    message = ("k " + cookie + " csrf test-csrf-secret test-session-secret small-private-value "
+               "account 321 私密昵称甲 " + text + " https://private.example/path?x=7 "
+               "uid=987; uname=未知敏感昵称; token=short; nickname:'另一个私名'; "
+               "id 12345678901234 AbCdEfGhIjKlMnOpQrs 你好\x00\u202e")
+    calls = []
+    def handle(request):
+        calls.append(request.method)
+        return httpx.Response(200, json=nav if request.method == "GET" else {"code": 0, "message": message,
+                   "uid": 321, "uname": "私密昵称甲", "data": {"msg": text, "account": COOKIE}})
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handle)) as client:
+        sender = DanmakuSender(DanmakuCredentials(tmp_path, cookie), client)
+        with pytest.raises(DanmakuSendError):
+            await sender.send(732, text)
+    saved = (tmp_path / "bilibili_send_diagnostic.private.json").read_text()
+    diagnostic = json.loads(saved)
+    # The wall-clock timestamp can coincidentally contain a short test UID.
+    # Check all retained response metadata, excluding that locally generated time.
+    response_metadata = json.dumps({key: value for key, value in diagnostic.items() if key != "updated_at"},
+                                   ensure_ascii=False)
+    for secret in ("test-session-secret", "test-csrf-secret", "small-private-value", "321", "私密昵称甲", text,
+                   "private.example", "987", "未知敏感昵称", "short", "另一个私名", "12345678901234", "AbCdEfGhIjKlMnOpQrs"):
+        assert secret not in response_metadata
+    preview = diagnostic["message"]["preview"]
+    assert len(preview) <= 240 and "\x00" not in preview and "\u202e" not in preview
+    assert "[已脱敏]" in preview
+    assert calls == ["GET", "POST"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("message,kind", [({"uid": 123, "cookie": COOKIE}, "object"), ([COOKIE], "array"), (12345, "number")])
+async def test_structured_private_messages_only_record_type(tmp_path, message, kind):
+    def handle(request):
+        return httpx.Response(200, json=NAV if request.method == "GET" else {"code": 0, "msg": message})
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handle)) as client:
+        sender = DanmakuSender(DanmakuCredentials(tmp_path, COOKIE), client)
+        with pytest.raises(DanmakuSendError):
+            await sender.send(732, "你好")
+    saved = (tmp_path / "bilibili_send_diagnostic.private.json").read_text()
+    assert json.loads(saved)["msg"] == {"type": kind}
+    assert "secret" not in saved and "12345" not in saved
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("message,accepted", [("0", True), ("k", False)])
+async def test_diagnostic_write_failure_never_changes_send_result_or_retries(tmp_path, monkeypatch, message, accepted):
+    calls = []
+    def replace_fails(*args):
+        raise PermissionError("private exception " + COOKIE)
+    monkeypatch.setattr("app.danmaku_send.os.replace", replace_fails)
+    def handle(request):
+        calls.append(request.method)
+        return httpx.Response(200, json=NAV if request.method == "GET" else {"code": 0, "message": message})
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handle)) as client:
+        sender = DanmakuSender(DanmakuCredentials(tmp_path, COOKIE), client)
+        if accepted:
+            assert (await sender.send(732, "你好"))["sent"] is True
+        else:
+            with pytest.raises(DanmakuSendError) as error:
+                await sender.send(732, "你好")
+            assert error.value.code == "send_unknown" and "secret" not in str(error.value)
+    assert calls == ["GET", "POST"]
+    assert list(tmp_path.iterdir()) == []
+
+
+@pytest.mark.asyncio
+async def test_invalid_json_overwrites_previous_hint_with_fresh_metadata(tmp_path):
+    calls = []
+    first = True
+    def handle(request):
+        calls.append(request.method)
+        if request.method == "GET":
+            return httpx.Response(200, json=NAV)
+        return httpx.Response(200, json={"code": 0, "message": "0"}) if first else httpx.Response(200, content=COOKIE.encode())
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handle)) as client:
+        sender = DanmakuSender(DanmakuCredentials(tmp_path, COOKIE), client)
+        await sender.send(732, "你好")
+        path = tmp_path / "bilibili_send_diagnostic.private.json"
+        previous = json.loads(path.read_text())
+        first = False
+        with pytest.raises(DanmakuSendError) as error:
+            await sender.send(732, "你好")
+        assert error.value.code == "send_unknown"
+    current = json.loads(path.read_text())
+    assert current["parse_status"] == "invalid_json" and current["code"] is None
+    assert current["message"] == {"type": "missing"}
+    assert current["updated_at"] >= previous["updated_at"]
+    assert "secret" not in path.read_text()
+    assert calls == ["GET", "POST", "GET", "POST"]
+
+
+def test_diagnostic_masks_before_truncation_and_omits_oversized_input():
+    token = "private-secret-value-1234"
+    assert token[:8] not in DanmakuSender._diagnostic_preview("词" * 236 + token, [token])
+    assert DanmakuSender._diagnostic_preview("字" * 17000 + token, [token]) == "[过长提示，已省略]"
+    assert DanmakuSender._diagnostic_preview("priva\x00te-secret", ["private-secret"]) == "[已脱敏]"

@@ -8,9 +8,9 @@
   <title>AI同担—你的AI直播同担</title>
   <link rel="icon" type="image/png" href="/static/brand/ai-tongdan-logo.png">
   <link rel="apple-touch-icon" href="/static/brand/ai-tongdan-logo.png">
-  <link rel="stylesheet" href="/static/app.css?v=danmaku-copy-fill-1">
+  <link rel="stylesheet" href="/static/app.css?v=local-sender-1">
   <script defer src="/static/vendor/hls.min.js"></script>
-  <script defer src="/static/app.js?v=danmaku-copy-fill-1"></script>
+  <script defer src="/static/app.js?v=manual-send-only-1"></script>
 </head>
 <body>
   <header class="topbar">
@@ -63,6 +63,18 @@
               <div id="danmaku-chorus-items" class="danmaku-chorus-items"></div>
               <p id="danmaku-chorus-empty" class="danmaku-candidate-empty">还没有集中复读，大家刷起来时会自动出现。</p>
             </section>
+            <section class="danmaku-transport" aria-labelledby="danmaku-transport-label">
+              <div class="danmaku-transport-heading"><label id="danmaku-transport-label" for="danmaku-transport">从哪里发弹幕</label><select id="danmaku-transport"><option value="server">服务器</option><option value="local">我的电脑</option></select></div>
+              <p id="danmaku-transport-help">使用服务器保存的登录信息发送。切换发送位置会停止一键融入。</p>
+              <div id="danmaku-local-panel" hidden>
+                <div class="danmaku-local-heading"><strong id="danmaku-local-status" role="status">等待本机助手</strong><a href="/api/danmaku/local/guide" target="_blank" rel="noopener noreferrer" class="text-link">查看详细步骤 ↗</a></div>
+                <p>直播理解继续在服务器运行；弹幕通过你自己的电脑发送。Cookie 只交给本机助手，不用粘贴到网页。</p>
+                <ol class="danmaku-local-steps"><li>在自己的电脑下载、解压助手，运行里面的启动脚本。</li><li>在自己的电脑导出 B 站 Cookie，将 bilibili_cookie.txt 放到助手目录。</li><li>点击下方“连接本机助手”，把配对码输入助手窗口。</li></ol>
+                <div class="danmaku-local-actions"><a id="danmaku-local-download" href="/api/danmaku/local/download" class="quiet-button" download>下载本机发送助手</a><button id="danmaku-local-pair" class="quiet-button" type="button">连接本机助手</button><button id="danmaku-local-disconnect" class="quiet-button" type="button" hidden>断开本机助手</button></div>
+                <div id="danmaku-local-pairing" class="danmaku-local-pairing" hidden><span>在自己电脑的助手窗口输入</span><output id="danmaku-local-code" aria-label="本机助手配对码"></output><span id="danmaku-local-expiry" role="status"></span><small>配对码只用于连接你的电脑，请勿分享。连接后仍需手动发送或开启一键融入。</small></div>
+              </div>
+              <p id="danmaku-transport-feedback" class="danmaku-send-feedback" role="status" hidden></p>
+            </section>
             <form id="danmaku-send-form" class="danmaku-send-form"><label for="danmaku-send-input" class="sr-only">要发送到直播间的弹幕</label><input id="danmaku-send-input" type="text" maxlength="100" autocomplete="off" placeholder="编辑弹幕，点击发送到当前直播间"><button id="danmaku-send-button" class="primary-button" type="submit" disabled>发送弹幕</button></form>
             <div class="danmaku-compose-actions"><button id="danmaku-login-toggle" class="text-link" type="button" aria-expanded="false" aria-controls="danmaku-login-form">配置本人登录</button></div>
             <div id="danmaku-auto" class="danmaku-auto" data-status="idle">
@@ -76,7 +88,7 @@
             </div>
             <p id="danmaku-send-feedback" class="danmaku-send-feedback" role="status" hidden></p>
             <div id="danmaku-copy-fallback" hidden><label for="danmaku-copy-text">浏览器未允许复制，请复制下方已选中的文本：</label><textarea id="danmaku-copy-text" rows="2" readonly></textarea></div>
-            <form id="danmaku-login-form" class="danmaku-login-form" hidden><label for="danmaku-cookie">本人 Bilibili 登录 Cookie</label><textarea id="danmaku-cookie" rows="2" autocomplete="off" spellcheck="false" placeholder="粘贴本人的登录 Cookie，仅保存在本机"></textarea><div><span>用于你本人账号发送；保存后会清空此输入。</span><button id="danmaku-login-save" class="quiet-button" type="submit">保存登录</button></div></form>
+            <form id="danmaku-login-form" class="danmaku-login-form" hidden><label for="danmaku-cookie">服务器使用的 Bilibili 登录 Cookie</label><textarea id="danmaku-cookie" rows="2" autocomplete="off" spellcheck="false" placeholder="此处提交的 Cookie 会保存在运行 AI同担的服务器"></textarea><div><span>若希望 Cookie 留在自己的电脑，请选择“我的电脑”。</span><button id="danmaku-login-save" class="quiet-button" type="submit">保存服务器登录</button></div></form>
             <section class="danmaku-sent" aria-labelledby="danmaku-sent-heading">
               <div class="danmaku-sent-heading"><h3 id="danmaku-sent-heading">已发送弹幕 <span id="danmaku-sent-count" class="count-badge">0</span></h3><span>本次会话最近 30 条 · 最新在前</span></div>
               <p id="danmaku-sent-empty" class="danmaku-sent-empty">还没发言？你的每一次接梗，都会留在这里。</p>

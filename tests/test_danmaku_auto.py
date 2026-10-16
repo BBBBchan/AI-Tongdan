@@ -127,15 +127,36 @@ async def tick(auto):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("draft", ["好痛的歌", "太阳去哪儿了"])
+async def test_music_preference_applies_to_auto_pool_without_hiding_audience_records(trial, draft):
+    auto, ws, clock = trial
+    await auto.start(ws.session["id"])
+    ws.seed(draft)
+    ws.seed_chorus("太阳呢？")
+    ws.seed_chorus("听emo了", append=True)
+    ws.snapshot = lambda: {
+        "observations": [{"window_end": 0, "description": "主播正在唱歌，屏幕显示歌词"}],
+        "danmaku": ws.danmaku,
+    }
+    texts = {item["text"] for item in auto._choices()}
+    assert texts == ({"好痛的歌", "听emo了"} if draft == "好痛的歌" else {"听emo了"})
+    assert any(item["text"] == "太阳呢？" for item in ws.danmaku_chorus["items"])
+    assert ws.attempts == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("text", ["杯子抢镜了", "哈哈"])
 @pytest.mark.parametrize("change,expected", [
     ("stop", "stopped"), ("stale", "active"), ("style", "active"),
     ("pending-style", "active"),
 ])
-async def test_rechecks_trial_at_post_boundary_after_authentication(trial, change, expected):
+async def test_rechecks_trial_at_post_boundary_after_authentication(trial, change, expected, text):
     auto, ws, clock = trial
     await auto.start(ws.session["id"])
     clock.advance(1799)
-    ws.seed()
+    ws.seed(text)
+    if text == "哈哈":
+        ws.danmaku = [{"text": text}]
 
     async def authentication_then_guard(sid, text, *, before_post, source):
         assert source == "auto"
@@ -301,6 +322,57 @@ async def test_stale_repeated_copied_or_invalid_candidates_are_skipped(trial, in
     assert ws.attempts == [] and ws.resolve_calls == []
     assert auto.data["skipped_count"] == 1
     assert auto.next_due == clock.monotonic() + 300
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("text", ["哈哈", "还真是", "好听好听"])
+async def test_common_audience_reaction_can_send_without_chorus_threshold(trial, text):
+    auto, ws, clock = trial
+    await auto.start(ws.session["id"])
+    ws.seed(text)
+    ws.danmaku = [{"text": f" {text} "}]
+    assert not ws.danmaku_chorus
+
+    await tick(auto)
+
+    assert [item["text"] for item in ws.attempts] == [text]
+    assert auto.data["history"][-1]["candidate_source"] == "ai"
+    assert auto.data["sent_count"] == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("source", ["this_run", "manual"])
+@pytest.mark.parametrize("text", ["哈哈", "还真是", "好听好听"])
+async def test_common_audience_reaction_still_excludes_own_recent_sends(trial, source, text):
+    auto, ws, clock = trial
+    await auto.start(ws.session["id"])
+    clock.advance(40)
+    ws.seed(text)
+    ws.danmaku = [{"text": text}]
+    if source == "this_run":
+        auto.sent_texts.add(text)
+    else:
+        ws.sent_danmaku = [{"text": text, "sent_at": clock.time(), "source": "manual"}]
+
+    await tick(auto)
+
+    assert ws.attempts == [] and ws.resolve_calls == []
+    assert auto.data["skipped_count"] == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("text", ["杯子抢镜了", "哈哈雪糕刚刚把歌词唱反了"])
+async def test_distinctive_audience_lines_are_still_excluded(trial, text):
+    auto, ws, clock = trial
+    await auto.start(ws.session["id"])
+    clock.advance(40)
+    ws.seed(text)
+    ws.danmaku = [{"text": text}]
+
+    await tick(auto)
+
+    assert ws.attempts == [] and ws.resolve_calls == []
+    assert auto.data["skipped_count"] == 1
 
 
 @pytest.mark.asyncio

@@ -19,6 +19,6 @@
     }
   ],
   "note": "Three DeltaStreamer memory core files copied unchanged from the specified commit. Live Bilibili integration, asynchronous observation and Q&A, audio, danmaku features and web UI are implemented in this repository. See THIRD_PARTY_NOTICES.md.",
-  "availability": "Upstream repository is currently private; public release is planned.",
+  "availability": "Upstream repository is public.",
   "license": "CC-BY-NC-4.0"
 }

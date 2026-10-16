@@ -47,21 +47,24 @@
 
 ## 下载代码
 
-本仓库当前为私有仓库，需要先获得访问权限并登录对应 GitHub 账号。**GitHub 登录凭据只用于下载代码，与 Bilibili Cookie 是两回事。**
+仓库公开可访问后，HTTPS 和 ZIP 下载均无需 GitHub 登录、访问令牌或 GitHub CLI。下载代码不需要 Bilibili Cookie。
 
-### 方法一：GitHub CLI
+### 方法一：HTTPS（推荐）
 
-先安装 Git 与 GitHub CLI，然后执行：
+先安装 Git，然后执行：
 
 ```bash
-gh auth login
-gh repo clone BBBBchan/AI-Tongdan
+git clone https://github.com/BBBBchan/AI-Tongdan.git
 cd AI-Tongdan
 ```
 
-`gh auth login` 会引导交互式登录，不需要把访问令牌写入 README、Git remote URL 或应用配置。
+下载完成后，后续命令均在这个 `AI-Tongdan` 文件夹内执行。
 
-### 方法二：SSH
+### 方法二：ZIP
+
+在浏览器中打开 [仓库首页](https://github.com/BBBBchan/AI-Tongdan)，选择 **Code → Download ZIP**。解压后在终端进入含有 `start.sh`、`requirements.txt` 的目录。ZIP 适合只运行应用；如果希望之后通过 `git pull` 更新，建议使用方法一。
+
+### 方法三：SSH 或 GitHub CLI（可选）
 
 如果 GitHub 账号已配置 SSH key：
 
@@ -70,16 +73,14 @@ git clone git@github.com:BBBBchan/AI-Tongdan.git
 cd AI-Tongdan
 ```
 
-### 方法三：HTTPS 或 ZIP
+如果已安装并配置 GitHub CLI，也可以使用：
 
 ```bash
-git clone https://github.com/BBBBchan/AI-Tongdan.git
+gh repo clone BBBBchan/AI-Tongdan
 cd AI-Tongdan
 ```
 
-HTTPS 使用本机 Git 凭据管理器完成认证。也可以在已登录且有权限的浏览器中打开 [仓库首页](https://github.com/BBBBchan/AI-Tongdan)，选择 **Code → Download ZIP**，解压后进入目录。
-
-ZIP 下载适合只运行应用；如果希望后续更新，建议使用 Git。私有仓库无权限时的 404 不表示下载命令有误。
+SSH 与 GitHub CLI 使用你自己的 GitHub 配置；无需把 token 写进 remote URL、项目配置或脚本。初次使用无需设置这两种方式，按方法一或方法二即可。
 
 <a id="install"></a>
 
@@ -148,12 +149,12 @@ cp .env.example .env
 
 使用文本编辑器打开 `.env`，或在终端执行 `nano .env`。在 nano 中按 `Ctrl+O`、回车保存，按 `Ctrl+X` 退出。它是配置文本，不需要运行，也不要执行 `source .env`。
 
-最少可以先保留：
+暂时没有音频服务时，将 `AUDIO_ENABLED` 设为 `0`；其他采样配置可以先保留默认值：
 
 ```dotenv
 FFMPEG_BIN=ffmpeg
 DATA_DIR=data
-AUDIO_ENABLED=1
+AUDIO_ENABLED=0
 SAMPLE_INTERVAL=1
 OBSERVATION_FRAMES=4
 OBSERVATION_STRIDE=3
@@ -169,7 +170,7 @@ OBSERVATION_TARGET_LAG=15
 ### 4. 启动
 
 ```bash
-./start.sh
+bash start.sh
 ```
 
 看到终端提示 Uvicorn 正在 `http://127.0.0.1:7862` 运行后，保持这个终端打开，浏览器打开 **http://127.0.0.1:7862**，输入正在开播的直播间网址并连接。Windows / WSL 也在 Windows 的浏览器打开这个地址。播放器默认静音，点击播放器音量控件开启声音。
@@ -181,7 +182,7 @@ OBSERVATION_TARGET_LAG=15
 如果希望修改端口：
 
 ```bash
-HOST=127.0.0.1 PORT=7863 ./start.sh
+HOST=127.0.0.1 PORT=7863 bash start.sh
 ```
 
 **HOST / PORT 必须通过启动命令的环境变量设置。** 当前 `start.sh` 在应用加载 `.env` 之前确定监听地址，因此仅修改 `.env` 中的 HOST / PORT 不会改变 Uvicorn 监听地址。
@@ -293,7 +294,7 @@ python3 -m venv .venv-download
 
 ### 推荐：只向本机转发网页端口
 
-在服务器上正常运行 `./start.sh`，在个人电脑终端执行：
+在服务器上正常运行 `bash start.sh`，在个人电脑终端执行：
 
 ```bash
 ssh -N -L 7862:127.0.0.1:7862 your-user@your-server
@@ -320,7 +321,7 @@ Web 配置仍填写本机 `8020/8021`，同时使用与服务端一致的 API ke
 
 ```bash
 tmux new -s ai-tongdan
-./start.sh
+bash start.sh
 ```
 
 终端内 `Ctrl+C` 正常关闭 Web 服务，保留活动会话恢复指针。网页点击“断开”则主动停止会话并清除恢复指针。
@@ -330,7 +331,7 @@ tmux new -s ai-tongdan
 ```bash
 git pull --ff-only
 .venv/bin/python -m pip install -r requirements.txt
-./start.sh
+bash start.sh
 ```
 
 Web 应用、视觉服务与音频服务是独立进程，停止 Web 不会自动释放模型服务器的 GPU。完整停机时分别关闭对应服务。
@@ -343,11 +344,15 @@ Web 应用、视觉服务与音频服务是独立进程，停止 Web 不会自�
 
 **观看和接收访客弹幕通常不要求登录；向直播间发送弹幕需要你自己的 Bilibili 登录状态。** Cookie 失效、平台验证、直播间禁言或账号限制仍由 Bilibili 决定。
 
+先选择发送位置：**服务器**模式使用网页绑定的 Cookie，由运行应用的机器发出请求；**我的电脑**模式使用[本机发送助手](local-sender.md)，Cookie 文件只在自己的电脑读取，不需要粘贴到远程网页。两种模式都支持手动发送与“一键融入”。本机助手断开时，本机模式会停止发送，不会改用服务器代发。切换网络出口不保证平台受理，也不会解除账号或直播间限制。
+
+轮巡也可以设置为**只允许手动发送**：候选模拟仍按计划保存，自动发送保持关闭；只有你在页面点击发送才会发送弹幕。复盘将手动发送的正文、时间和来源单独记录，不把它算作模拟轮次已发送。权限按每次访问及生效时间保存，后续开放手动发送不会改写之前“完全不发送”的记录。旧轮巡没有明确开启这项权限时，仍禁止手动和自动发送；更新 Cookie 本身不会改变发送权限。
+
 ### 获取本人 Cookie
 
 #### 方法一：用本地脚本导出
 
-仓库根目录提供 [get_bilibili_cookie.py](../get_bilibili_cookie.py)。先在浏览器登录自己的 B 站账号，然后在**这台浏览器所在的电脑和系统**运行脚本。应用部署在远程服务器时，仍在自己的电脑导出，再把文件内容粘贴到应用页面；远程服务器无法直接读取本机浏览器 Cookie。
+仓库根目录提供 [get_bilibili_cookie.py](../get_bilibili_cookie.py)。先在浏览器登录自己的 B 站账号，然后在**这台浏览器所在的电脑和系统**运行脚本。应用部署在远程服务器时，仍在自己的电脑导出。选择“服务器”发送时，把文件内容粘贴到应用页面；选择“我的电脑”发送时，文件留给本机助手读取。远程服务器无法直接读取本机浏览器 Cookie。
 
 在终端进入脚本所在文件夹，逐行执行：
 
@@ -365,7 +370,7 @@ python3 -m venv .venv-cookie
 source .venv-cookie/bin/activate
 ```
 
-成功后，当前文件夹会出现 **`bilibili_cookie.txt`**。用文本编辑器打开，复制里面的整行内容，按下方“通过网页绑定”粘贴到 **参与直播间 → 配置本人登录**。脚本不会在终端打印 Cookie，默认也**不会覆盖已有输出文件**。
+成功后，当前文件夹会出现 **`bilibili_cookie.txt`**。服务器发送模式下，用文本编辑器打开，复制里面的整行内容，按下方“通过网页绑定”粘贴到 **参与直播间 → 配置本人登录**。本机发送模式下，把这个文件留在助手文件夹即可。脚本不会在终端打印 Cookie，默认也**不会覆盖已有输出文件**。
 
 按需选择参数：
 
@@ -518,7 +523,9 @@ curl -X POST http://127.0.0.1:7862/api/danmaku/credentials \
 
 ### 一键融入：让同担也聊两句
 
-在 **参与直播间 → 一键融入** 设置基准间隔和发送数量，然后启动，即允许程序使用本人已配置的登录账号，向当前直播间自动发送候选弹幕：
+普通会话中，在 **参与直播间 → 一键融入** 设置基准间隔和发送数量，再明确点击启动，才允许程序使用本人已配置的登录账号，向当前直播间自动发送候选弹幕。绑定 Cookie 或点击候选本身不会启动自动发送。
+
+如果后台轮巡设置为**仅生成候选**，发送会被禁用；设置为**仅手动发送**时，只能由你点击发送，自动发送仍禁用。更换 Cookie、配对本机助手或刷新页面都不会解除这项轮巡策略。下列自动发送规则适用于允许“一键融入”的普通会话：
 
 - 基准间隔以**秒**为单位，默认 **300**，允许 **5–3600 的整数**；发送数量默认 **6 条**，允许 **1–1000 的整数**。运行期间这两个输入框锁定；要修改，先停止，再设置并重新启动。
 - 首条新候选就绪后立即发送，不先等待一个基准间隔。此后每轮独立从基准间隔的 **70%–130%** 范围内均匀随机抽取下一次计划间隔；相邻发送的等待从**上次成功发送完成后**开始计算。
@@ -604,7 +611,7 @@ curl -X POST http://127.0.0.1:7862/api/danmaku/credentials \
 
 ## 配置项参考
 
-下面覆盖主应用与启动脚本的配置。通常编辑项目根目录 `.env`，然后 `Ctrl+C` 停止应用并重新 `./start.sh`；`HOST` 和 `PORT` 是例外，写在启动命令前。
+下面覆盖主应用与启动脚本的配置。通常编辑项目根目录 `.env`，然后 `Ctrl+C` 停止应用并重新 `bash start.sh`；`HOST` 和 `PORT` 是例外，写在启动命令前。
 
 | 配置 | 默认值 / 含义 |
 | --- | --- |
@@ -638,6 +645,15 @@ curl -X POST http://127.0.0.1:7862/api/danmaku/credentials \
 <a id="data"></a>
 
 ## 数据保存、恢复与清理
+
+<a id="privacy"></a>
+
+### 哪些数据留在本地，哪些会发给服务
+
+- `.env`、`data/`、Cookie、模型密钥、本地 `danmakus_style/` JSON、轮巡记录与直播素材不随源码分发。发布自己修改的代码前，也不要将这些运行文件加入提交；截图或录屏分享前检查其中的账号与聊天内容。
+- 服务器发送模式的 Cookie 保存在运行应用的机器，只用于与 Bilibili 交互，不会进入模型提示。本机发送模式的 Cookie 留在助手所在电脑，不上传给远程 Demo；模型与网页运行在哪台机器，不改变这个区别。
+- 模型理解需要向你配置的接口传递画面、声音转写、弹幕上下文、问题及相关记忆；音频服务还会收到音频片段。本地语料模式会发送本轮选中的少量正文，因此“本地 JSON 不上传仓库”不等于“正文永不离开机器”。请使用自己认可的模型服务。
+- 仓库自带的首页 GIF 是示例数据演示；部署者自己的直播录像、真实弹幕和声纹参考不会因此获得公开发布许可。
 
 默认数据目录示意：
 
@@ -720,7 +736,7 @@ AI-Tongdan/
 .venv/bin/python -m pytest -q
 ```
 
-本次发布检查中，开发工作区和不带本机配置的干净代码副本均通过全部 **130 项应用测试**；干净副本仅通过 FFMPEG_BIN 指定已安装的 FFmpeg，没有复制 Cookie、模型 endpoint 或其他私有配置。测试覆盖：
+测试结果以当前版本在你环境中的实际输出为准。建议在不带本人 Cookie、模型 endpoint 或历史数据的干净副本中运行；需要时通过 FFMPEG_BIN 指定已安装的 FFmpeg。测试覆盖：
 
 - Bilibili URL、弹幕协议、压缩边界和生命周期；
 - 自适应/固定窗口调度、乱序结果、有限队列和帧引用保留；
@@ -807,6 +823,8 @@ configured=true 只代表填了配置。服务尚未加载完权重、GPU 显存
 
 ## 来源与非商业许可
 
-AI同担来自 **[DeltaStreamer](https://github.com/BBBBchan/DeltaStreamer)** 的结构化记忆核心，并扩展了直播、弹幕、声音和网页交互。原项目当前为私有仓库，后续计划开放；应用已包含运行所需核心文件，无需另行克隆。来源与文件记录见 [SOURCE_MANIFEST.json](../SOURCE_MANIFEST.json)。
+AI同担来自 **[DeltaStreamer](https://github.com/BBBBchan/DeltaStreamer)** 的结构化记忆核心，并扩展了直播、弹幕、声音和网页交互。上游代码与[论文](https://arxiv.org/abs/2610.19849)均已公开；应用已包含运行所需核心文件，无需另行克隆。来源与文件记录见 [SOURCE_MANIFEST.json](../SOURCE_MANIFEST.json)。
 
 本项目采用 **[CC BY-NC 4.0](../LICENSE)**，**不允许商业用途**。第三方代码、依赖和模型仍遵循各自许可，说明见 [THIRD_PARTY_NOTICES.md](../THIRD_PARTY_NOTICES.md)。论文引用统一保留在 [首页 Citation](../README.md#citation)。
+
+本项目公开源代码供非商业使用；非商业限制使该许可不符合 [OSI 的开源定义](https://opensource.org/osd)，不应将其描述为 OSI 认可的开源许可证。

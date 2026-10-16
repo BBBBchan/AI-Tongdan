@@ -57,8 +57,10 @@ _REACTION_WORDS = frozenset({
     "没看清", "等下", "等等", "等会", "求求了", "拜托了", "好的", "来了", "来咯", "走了", "润了",
     "溜了", "开了", "可以的", "差不多", "还真是", "确实是", "不会吧", "不至于", "真的假的",
     "真的吗", "那确实", "是这样的", "也没错", "那没事了", "那没事", "我不信", "有一说一", "什么情况",
-    "不明白", "原来如此", "又来了", "还来", "救命", "绝了", "有点意思", "有意思", "好搞笑",
+    "不明白", "原来如此", "又来了", "还来", "再来", "继续", "继续看", "救命", "绝了", "有点意思", "有意思", "好搞笑",
     "好尴尬", "好好笑", "没绷住", "好耶", "好看", "好诶", "好滴", "谢谢", "感谢", "支持", "加油",
+    "宝宝", "卧槽", "太惨了", "好崩溃", "咋这样", "神人", "这谁不怕", "给我吃口", "早早早", "流汗了",
+    "爆了", "爆爆爆", "懂你意思", "这下看懂了", "大大方方睡", "大大方方摆烂", "大大方方看", "大大方方玩", "开考",
 })
 _REACTION_PARTICLES = re.compile(r"[啊哦噢喔哎唉诶欸嗯恩呃额哈嘿嘻呵哼呜咦耶哇嚯嗷哟呀啦呢呗嘞呐咯唷]{1,8}")
 _REACTION_PHRASE = re.compile(r"(?:[真假是好对]{1,3}[的吗吧呀嘞啊诶呢了嘛]?|[不没][懂会行对错好][了啦呀啊嘛吧吗呢]?)")
@@ -73,8 +75,10 @@ _IRONY_STRUCTURE = re.compile(
 def is_common_reaction(text: str) -> bool:
     """Closed, short reaction grammar: never a test for arbitrary safe chat.
 
-    These portable expressions can recur naturally, unlike a distinctive quote
-    or a name/story. The input must be entirely accounted for by this grammar.
+    These expressions can recur across streams, unlike a distinctive quote or
+    a name/story. Recognition does not establish relevance to the current scene.
+    The input must be entirely accounted for by this grammar; named templates
+    and arbitrary additions to a known phrase are not admitted.
     """
     if (not isinstance(text, str) or not 1 <= len(text.strip()) <= 8
             or any(unicodedata.category(char).startswith("C") for char in text)):
@@ -390,9 +394,18 @@ class DanmakuCorpus:
         terms = _terms(" ".join(texts))
         query = sorted((term for term in terms if term in index.postings),
                        key=lambda term: (len(index.postings[term]), term))[:MAX_QUERY_TERMS]
-        excluded = {item["text"].strip() for key in ("audience_comments", "audience_history", "recently_sent")
+        already_sent = {item["text"].strip() for item in (context.get("recently_sent") or [])[-64:]
+                        if isinstance(item, dict) and isinstance(item.get("text"), str)}
+        audience_texts = {item["text"].strip() for key in ("audience_comments", "audience_history")
                     for item in (context.get(key) or [])[-64:]
                     if isinstance(item, dict) and isinstance(item.get("text"), str)}
+        # Ordinary shared reactions are useful voice evidence precisely when
+        # people in this room are using them. Do not apply the distinctive-quote
+        # copying rule to "哈哈" or "还真是". Avoid our own recent sends as before.
+        excluded = already_sent | {text for text in audience_texts if not is_common_reaction(text)}
+        live_reactions = {item["text"].strip() for item in (context.get("audience_comments") or [])[-64:]
+                          if isinstance(item, dict) and isinstance(item.get("text"), str)
+                          and is_common_reaction(item["text"].strip())}
         candidates = set()
         for term in query:
             postings = index.postings[term]
@@ -428,9 +441,14 @@ class DanmakuCorpus:
             if (style_value <= 20 and sample.style >= 70) or (style_value <= 60 and sample.style >= 90):
                 continue
             relevance = sum(math.log1p(len(index.samples) / len(index.postings[term])) for term in matches)
-            style_score = 0 if sample.style == 30 else 2.5 - abs(sample.style - style_value) / 12
+            # The slider adjusts how readily we tease, not whether ordinary
+            # laughter, agreement or praise is allowed. A high setting used to
+            # demote "好听" by five points and favour a rare provocative line.
+            style_score = (0 if sample.generic or sample.style == 30
+                           else 2.5 - abs(sample.style - style_value) / 12)
             frequency_score = min(math.log1p(sample.frequency), 6)
             score = style_score + frequency_score
+            score += 2 if sample.text in live_reactions else 0
             score -= 5 if sample.text in recent else 0
             rotation = ((number * 1103515245 + cursor * (number + 1) * 12345) % 65536) / 65536
             if sample.generic and not sample.paid:

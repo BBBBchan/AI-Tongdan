@@ -282,12 +282,12 @@ def test_high_slider_prefers_mock_defence_over_plain_jabs_and_gentle_excludes_bo
     assert set(store.select(context(), 0, limit=6)) == gentle
 
 
-@pytest.mark.parametrize("text", ["？", "???", "？！", "666", "1111", "哦哦", "嗯？", "啊？", "确实", "没看清", "这咋了", "哈哈哈哈"])
+@pytest.mark.parametrize("text", ["？", "???", "？！", "666", "1111", "哦哦", "嗯？", "啊？", "确实", "没看清", "这咋了", "哈哈哈哈", "哈哈", "还真是", "好听好听"])
 def test_common_reaction_is_a_portable_closed_grammar(text):
     assert corpus_module.is_common_reaction(text)
 
 
-@pytest.mark.parametrize("text", ["", "   ", "甲君", "王小明", "星球甲", "杯子颜色好看", "以前去了月球", "UID:123", "1234567", "[表情]", "哈哈\n", "\u202e哈哈", "?????????", "。", "abc"])
+@pytest.mark.parametrize("text", ["", "   ", "甲君", "王小明", "星球甲", "杯子颜色好看", "以前去了月球", "UID:123", "1234567", "[表情]", "哈哈\n", "\u202e哈哈", "?????????", "。", "abc", "大声密谋"])
 def test_arbitrary_names_claims_identifiers_and_empty_punctuation_are_not_reactions(text):
     assert not corpus_module.is_common_reaction(text)
 
@@ -376,6 +376,38 @@ def test_frequent_reaction_ranks_ahead_of_singletons_without_repeating_forever(t
     second = store.select(context("无匹配话题"), 30)
     assert set(first) == {"确实", "没看清", "懂了"}
     assert len(second) == 3 and set(first) != set(second)
+
+
+@pytest.mark.parametrize("style_value", [0, 30, 60, 80, 100])
+def test_ordinary_reactions_remain_the_base_at_every_slider_setting(tmp_path, style_value):
+    write(tmp_path, "a.json", {"messages": ["哈哈"] * 100 + ["还真是"] * 90
+        + ["好听好听"] * 80 + ["急了", "难绷", "典中典"]})
+    store = DanmakuCorpus(tmp_path)
+    store.refresh()
+    assert set(store.select(context("无匹配话题"), style_value)) == {"哈哈", "还真是", "好听好听"}
+
+
+def test_current_shared_reactions_are_voice_evidence_but_recent_sends_still_rotate(tmp_path):
+    write(tmp_path, "a.json", {"messages": ["哈哈", "还真是", "好听好听", "确实", "懂了",
+                                                   "杯子颜色好看"]})
+    store = DanmakuCorpus(tmp_path)
+    store.refresh()
+    current = context()
+    current["audience_comments"] = [{"text": text} for text in ("哈哈", "还真是", "好听好听", "杯子颜色好看")]
+    current["audience_history"] = [{"text": "哈哈"}]
+    assert set(store.select(current, 100)) == {"哈哈", "还真是", "好听好听"}
+    current["recently_sent"] = [{"text": "哈哈"}]
+    assert "哈哈" not in store.select(current, 100)
+
+
+def test_context_dependent_expression_is_not_retrieved_as_universal_filler(tmp_path):
+    write(tmp_path, "a.json", {"messages": ["大声密谋"] * 100 + ["哈哈", "还真是", "好听好听"]})
+    store = DanmakuCorpus(tmp_path)
+    store.refresh()
+    assert "大声密谋" not in store.select(context("蓝色杯子被举起来了"), 100)
+    # Shared topic terms can make a reference relevant; the generator still
+    # checks the actual meaning rather than treating this as a free reaction.
+    assert "大声密谋" in store.select(context("几个人在公开密谋"), 100)
 
 
 def test_total_reference_character_budget_is_enforced_for_longer_expressions(tmp_path):

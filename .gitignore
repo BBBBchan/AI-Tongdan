@@ -1,5 +1,6 @@
 # Local environments and settings
 .venv*/
+.aitongdan-local/
 .env
 .env.*
 !.env.example
@@ -13,6 +14,13 @@ __pycache__/
 /data/
 /models/
 /test-results/
+/output/
+# Generated local patrol review and selected recording links (private runtime data)
+/static/patrol-review/
+/static/promo-preview*/
+/static/promo-vertical*/
+/static/promo-update-review*/
+/static/social-release*/
 # Local danmaku / Super Chat source records; never needed at runtime
 /danmakus_style/
 *.private.*

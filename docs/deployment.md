@@ -24,14 +24,14 @@
 
 ## 2. 下载代码，安装主应用
 
-私有仓库必须先获得访问权限。通过自己配置好的 GitHub SSH 身份下载：
+仓库公开可访问后，可直接通过 HTTPS 下载，无需 GitHub 登录或访问令牌：
 
 ```bash
-git clone git@github.com:BBBBchan/AI-Tongdan.git
+git clone https://github.com/BBBBchan/AI-Tongdan.git
 cd AI-Tongdan
 ```
 
-也可以在已登录 GitHub 的浏览器中下载 ZIP 并解压。仅从仓库取得源代码不会下载模型。后续命令除特别注明外，都在仓库根目录执行。
+也可以打开 [仓库首页](https://github.com/BBBBchan/AI-Tongdan)，选择 **Code → Download ZIP**，解压后进入含有 `start.sh` 的文件夹。公开 ZIP 下载同样无需登录。仅从仓库取得源代码不会下载模型。后续命令除特别注明外，都在仓库根目录执行。
 
 Ubuntu/Debian 示例：
 
@@ -69,7 +69,7 @@ chmod 600 .env
 启动应用：
 
 ```bash
-HOST=127.0.0.1 PORT=7862 ./start.sh
+HOST=127.0.0.1 PORT=7862 bash start.sh
 ```
 
 浏览器打开 `http://127.0.0.1:7862`。启动脚本只在 `.venv` 不存在时首次安装依赖；更新 `requirements.txt` 后，应主动重新执行 `pip install -r requirements.txt`。`HOST`/`PORT` 建议像上面一样从 shell 显式传入，避免把仅供 Python 读取的 `.env` 配置误当成 shell 环境。

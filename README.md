@@ -8,9 +8,9 @@
 
 一起看直播，一起接梗，一起聊喜欢的人和事。AI同担会结合画面、声音和弹幕记下正在发生的事；你随时可以插一句问题，也可以挑条合拍的弹幕加入现场。
 
-[看看演示](#先看看同担能陪你做什么) · [快速启动](#快速启动) · [详细配置与使用](docs/configuration.md) · [自己部署模型](docs/deployment.md)
+[看看演示](#先看看同担能陪你做什么) · [快速启动](#快速启动) · [详细配置与使用](docs/configuration.md) · [本机发送助手](docs/local-sender.md) · [自己部署模型](docs/deployment.md)
 
-维护者：**[BBBBchan](https://github.com/BBBBchan)** · 基于 **[DeltaStreamer](https://github.com/BBBBchan/DeltaStreamer)**（原仓库目前私有，后续开放）· **[CC BY-NC 4.0，禁止商用](LICENSE)**
+维护者：**[BBBBchan](https://github.com/BBBBchan)** · 基于 **[DeltaStreamer](https://github.com/BBBBchan/DeltaStreamer)** · **[CC BY-NC 4.0，禁止商用](LICENSE)**
 
 ## 先看看同担能陪你做什么
 
@@ -35,6 +35,8 @@
 **大家都在刷？这句不能少。** 识别到多人集中复读时，独立的「大家在刷」小区域会展示最多三条原句，不用等模型、不占五条 AI 候选的位置；一键融入也会从中选。向右拉到「开串」，试试假装护航、一本正经说反话的幽默反串。
 
 **接话的语气，也能挑。** “内置风格”下载即用；“本地语料”可加入自己的弹幕或 Super Chat JSON，每轮挑少量例句参考。两种都能拖动“纯良 ↔ 开串”换语气，无需额外训练；个人记录不随仓库分发。[风格与语料说明](docs/configuration.md#两种风格来源内置风格与本地语料)
+
+**同担在云端，你在现场接话。** 应用部署在远程服务器时，可以把发送位置切到“我的电脑”，下载并配对本机发送助手。手动弹幕和“一键融入”都由自己的电脑向 B 站发送，Cookie 留在电脑上；本机无需 GPU 或模型。[一步步设置本机发送](docs/local-sender.md)
 
 ![参与直播间：选择候选、编辑草稿与复制新弹幕，示例数据演示](docs/assets/demo-danmaku.gif)
 
@@ -66,7 +68,7 @@
 
 ### 1. 准备工具（只做一次）
 
-需要 Python **3.10 或以上**、FFmpeg，以及帮助下载私有仓库的 Git / GitHub CLI。展开自己系统的说明：
+需要 Python **3.10 或以上**、FFmpeg，以及用于下载和更新代码的 Git。展开自己系统的说明：
 
 <details>
 <summary><strong>Windows：使用 WSL Ubuntu</strong></summary>
@@ -90,7 +92,7 @@ wsl --install
 
 ```bash
 sudo apt-get update
-sudo apt-get install -y python3 python3-venv python3-pip ffmpeg git gh nano
+sudo apt-get install -y python3 python3-venv python3-pip ffmpeg git nano
 ```
 
 输入系统密码时终端不显示字符，这是正常现象。其他发行版请按 [详细安装说明](docs/configuration.md#安装并启动应用) 准备对应工具。
@@ -103,7 +105,7 @@ sudo apt-get install -y python3 python3-venv python3-pip ffmpeg git gh nano
 打开“终端”。如果还没有 Homebrew，先按 [Homebrew 官网](https://brew.sh/zh-cn/) 完成安装，并照安装结束时的提示配置终端。然后执行：
 
 ```bash
-brew install python ffmpeg git gh
+brew install python ffmpeg git
 ```
 
 </details>
@@ -112,23 +114,14 @@ brew install python ffmpeg git gh
 
 ### 2. 下载 AI同担
 
-仓库目前为私有，需要你的 GitHub 账号已获得访问权限。在终端执行：
+仓库公开可访问后，下面的 HTTPS 下载无需 GitHub 登录、访问令牌或 GitHub CLI。在终端执行：
 
 ```bash
-gh auth login --hostname github.com --web
-```
-
-按提示在浏览器登录 GitHub、输入终端给出的一次性验证码并授权；若询问 Git 协议，选择 **HTTPS**。浏览器没有自动打开时，手动打开终端显示的网址。这个登录用于下载代码，与 B 站账号是两回事。[GitHub CLI 登录说明](https://cli.github.com/manual/gh_auth_login)
-
-登录完成后执行：
-
-```bash
-gh config set git_protocol https --host github.com
-gh repo clone BBBBchan/AI-Tongdan
+git clone https://github.com/BBBBchan/AI-Tongdan.git
 cd AI-Tongdan
 ```
 
-`cd` 的意思是进入文件夹。**后面的命令都在这个文件夹内执行**，不要每一步都重新打开终端。也可通过网页下载 ZIP，步骤见 [其他下载方式](docs/configuration.md#下载代码)。
+`cd` 的意思是进入文件夹。**后面的命令都在这个文件夹内执行**，不要每一步都重新打开终端。也可以打开 [仓库首页](https://github.com/BBBBchan/AI-Tongdan)，选择 **Code → Download ZIP**，解压后进入含有 `start.sh` 的文件夹；ZIP 下载也无需登录。[其他下载方式](docs/configuration.md#download)
 
 ### 3. 填好配置
 
@@ -170,6 +163,8 @@ bash start.sh
 
 停止时在终端按 **Ctrl+C**；下次进入同一个文件夹，再运行 `bash start.sh`。如果上次依赖安装中断，先执行 `.venv/bin/python -m pip install -r requirements.txt`，再启动。远程服务器访问见 [远程部署](docs/configuration.md#远程机器部署与访问)。
 
+Cookie、API 密钥、本地语料 JSON、会话与直播素材不随源码分发，也不要提交到自己的公开仓库。使用远程模型时，理解所需的画面、转写、问题和少量语料参考会发给你配置的模型服务；Cookie 不会发给模型。[数据与隐私说明](docs/configuration.md#privacy)
+
 ## 需要时再翻的小手册
 
 | 想做什么 | 去哪里看 |
@@ -177,26 +172,32 @@ bash start.sh
 | 调整模型 API、音频、端口和其他参数 | [详细配置与使用指南](docs/configuration.md) |
 | 下载权重、部署视觉与音频模型 | [模型部署指南](docs/deployment.md) |
 | 导出、绑定、更新或清除自己的 B 站 Cookie | [本地导出脚本](get_bilibili_cookie.py) · [Cookie 绑定教程](docs/configuration.md#绑定自己的-bilibili-cookie) |
+| 远程运行 AI，用自己电脑的网络发送弹幕 | [本机发送助手：下载、配对与启动](docs/local-sender.md) |
 | 标记主播声音、改名或合并说话人 | [声音与记忆](docs/configuration.md#声音说话人和记忆) |
+| 按关注列表轮巡，保存候选、问答与本地复盘 | [轮巡工具与不发送示例](scripts/README.md) |
 | 备份数据、更新应用、处理运行问题 | [配置指南](docs/configuration.md#数据保存恢复与清理) · [常见问题](docs/configuration.md#常见问题) |
 | 使用 Logo 或了解 GIF 录制方式 | [品牌资产](docs/branding.md) · [演示素材](docs/assets/README.md) |
 
 ## 来源与许可
 
-**本项目来源于 [DeltaStreamer](https://github.com/BBBBchan/DeltaStreamer)**，在其记忆核心上扩展了直播观看、声音理解、持续问答与弹幕互动。原仓库目前私有，后续计划开放；本仓库已包含运行所需的核心文件，无需另外克隆。来源记录见 [SOURCE_MANIFEST.json](SOURCE_MANIFEST.json)。
+**本项目来源于 [DeltaStreamer](https://github.com/BBBBchan/DeltaStreamer)**，在其记忆核心上扩展了直播观看、声音理解、持续问答与弹幕互动。上游代码与[论文](https://arxiv.org/abs/2610.19849)均已公开；本仓库已包含运行所需的核心文件，无需另外克隆。来源记录见 [SOURCE_MANIFEST.json](SOURCE_MANIFEST.json)。
 
 原创代码与文档采用 **[CC BY-NC 4.0](LICENSE)，不允许商用**。第三方代码与模型保留各自许可，见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
 
+这是面向非商业使用的源代码公开；由于保留非商业限制，CC BY-NC 4.0 不属于 [OSI 定义](https://opensource.org/osd)下的开源许可证。
+
 ## Citation
 
-如果本项目对你的研究有帮助，请引用其基础工作 **DeltaStreamer**。以下署名与原项目当前论文信息一致；暂未填写尚未核实的 arXiv 编号或 DOI，后续公开后更新。
+如果本项目对你的研究有帮助，请引用其基础工作 **[DeltaStreamer](https://arxiv.org/abs/2610.19849)**。论文作者署名独立于本应用的维护者信息。
 
 ```bibtex
-@misc{sun2026deltastreamer,
+@article{sun2026deltastreamer,
   title  = {DeltaStreamer: Towards Human-Like Agentic Streaming Video Understanding},
   author = {Boyuan Sun and Deshui Miao and Wenzhao Gao and Shaoyong Jia and
             Shaohui Jiao and Chi Liu and Yan Shu and Derek Li and Bryan Dai and
             Shengsheng Qian and Qibin Hou},
-  year   = {2026}
+  journal = {arXiv preprint arXiv:2610.19849},
+  year   = {2026},
+  url    = {https://arxiv.org/abs/2610.19849}
 }
 ```

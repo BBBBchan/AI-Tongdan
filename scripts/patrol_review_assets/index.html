@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <meta name="theme-color" content="#10101d">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; media-src 'self'; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'">
+  <title>AI 同担 · 直播复盘档案</title>
+  <link rel="icon" href="assets/logo.png">
+  <link rel="stylesheet" href="review.css">
+  <script defer src="review.js"></script>
+</head>
+<body>
+  <a class="skip-link" href="#rooms">跳到房间记录</a>
+  <div class="ambient" aria-hidden="true"></div>
+  <div class="page-shell">
+    <header class="topbar">
+      <a class="brand" href="#" aria-label="AI 同担复盘首页"><img src="assets/logo.png" width="40" height="40" alt=""><span>AI 同担<span class="brand-divider">/</span><span class="brand-sub">直播档案</span></span></a>
+      <span class="archive-badge"><span class="status-dot" aria-hidden="true"></span>本地快照 · 非实时</span>
+    </header>
+    <main>
+      <section class="hero" aria-labelledby="page-title">
+        <div class="hero-copy"><p class="eyebrow">THE WATCH PARTY, REWOUND</p><h1 id="page-title">昨晚的直播，<br>一起<span>再逛一遍。</span></h1><p class="hero-description">从一句弹幕到一次追问，把同担看过、想过的内容留在这里。点开一个直播间，回到当时的现场。</p></div>
+        <aside class="snapshot-card" aria-label="快照信息"><div class="snapshot-heading"><span class="tiny-label">本轮复盘</span><span id="run-state" class="tag">读取中</span></div><p id="run-name" class="run-name">正在读取本地档案</p><dl class="snapshot-times"><div><dt>页面生成</dt><dd id="generated-at">—</dd></div><div><dt>采集截止</dt><dd id="captured-until">—</dd></div></dl><p class="snapshot-note">北京时间 UTC+08:00。状态与计数均为导出时的快照，页面不会自动采集直播。</p></aside>
+      </section>
+      <div id="load-error" class="notice error-notice" role="alert" hidden></div>
+      <section id="overview" class="metrics" aria-label="本轮概况"></section>
+      <div id="mode-note" class="notice mode-notice"><span class="notice-symbol" aria-hidden="true">↗</span><p>正在读取本轮记录规则。</p></div>
+      <section id="rooms" class="rooms-section" aria-labelledby="rooms-heading">
+        <div class="section-heading"><div><p class="eyebrow">ROOM ARCHIVE</p><h2 id="rooms-heading">逛过的直播间 <span id="room-count" class="heading-count"></span></h2></div><div class="view-switch" role="group" aria-label="记录显示方式"><button id="grid-view" class="icon-button is-active" type="button" aria-pressed="true" aria-label="卡片视图" title="卡片视图"><svg viewBox="0 0 20 20" aria-hidden="true"><rect x="3" y="3" width="5" height="5" rx="1"/><rect x="12" y="3" width="5" height="5" rx="1"/><rect x="3" y="12" width="5" height="5" rx="1"/><rect x="12" y="12" width="5" height="5" rx="1"/></svg></button><button id="table-view" class="icon-button" type="button" aria-pressed="false" aria-label="表格视图" title="表格视图"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M3 5h14M3 10h14M3 15h14"/></svg></button></div></div>
+        <div class="filters"><label class="search-field"><svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="8.5" cy="8.5" r="5.5"/><path d="m13 13 4 4"/></svg><span class="sr-only">搜索房间、候选或问答</span><input id="search-input" type="search" placeholder="搜索房间、弹幕候选或问答…" autocomplete="off"><kbd aria-hidden="true">/</kbd></label><label class="room-select"><span class="sr-only">筛选指定房间</span><select id="room-filter"><option value="">全部房间</option></select></label></div>
+        <div class="filter-row"><div class="filter-chips" role="group" aria-label="按记录类型筛选"><button class="filter-chip is-active" type="button" data-filter="all" aria-pressed="true">全部记录</button><button class="filter-chip" type="button" data-filter="qa" aria-pressed="false">有问答</button><button class="filter-chip" type="button" data-filter="issues" aria-pressed="false">有异常 / 跳过</button><button class="filter-chip" type="button" data-filter="planned" aria-pressed="false">指定房间</button></div><p id="search-status" class="search-status" role="status" aria-live="polite"></p></div>
+        <div id="room-results" class="room-grid"></div>
+        <div id="empty-state" class="empty-state" hidden><span class="empty-symbol" aria-hidden="true">⌕</span><h3>暂时没找到对应记录</h3><p>换个关键词，或清除筛选再看看。</p><button id="clear-filters" class="secondary-button" type="button">清除筛选</button></div>
+      </section>
+      <footer class="page-footer"><div><strong>AI 同担</strong><span>陪你看直播，也陪你找回错过的片段。</span></div><p>原始记录供人工复盘。回答“已完成”表示模型已返回，不代表内容正确；模拟记录不会发送到直播间。</p><nav id="archive-links" aria-label="下载本轮档案"></nav></footer>
+    </main>
+  </div>
+  <dialog id="room-dialog" class="room-dialog" aria-labelledby="detail-title">
+    <div class="dialog-shell"><header class="dialog-header"><div><p id="detail-kicker" class="eyebrow"></p><h2 id="detail-title"></h2></div><button id="close-detail" class="icon-button close-button" type="button" aria-label="关闭房间详情">×</button></header><div id="detail-summary" class="detail-summary"></div><div id="detail-media" class="detail-media"></div><div id="detail-tabs" class="detail-tabs" role="tablist" aria-label="房间档案分类"></div><div id="detail-content" class="detail-content" role="tabpanel" tabindex="0"></div><footer class="dialog-footer">本地档案 · 内容时间与记录时间可能不同，录像定位按实际存档信息展示。</footer></div>
+  </dialog>
+  <script type="application/json" id="review-data">{{REVIEW_DATA}}</script>
+</body>
+</html>

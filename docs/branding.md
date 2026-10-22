@@ -1,4 +1,18 @@
-# AI同担 Logo
+# AI同担品牌与小担形象
+
+## 小担
+
+小担是 AI同担的角色形象：黑色双马尾、红瞳、红黑耳机，搭配白领、红领带和黑色袖套。README 使用既有介绍片与日记制作中的角色素材，分别表现欢迎、接梗和专注工作。
+
+| 素材 | 表情与用途 |
+| --- | --- |
+| [招手的小担](assets/xiaodan/wave.png) | README 顶部主视觉，与 B 站账号入口连接。 |
+| [眨眼的小担](assets/xiaodan/smug.png) | 弹幕互动与聊天介绍。 |
+| [工作中的小担](assets/xiaodan/focused.png) | 切片与内容制作介绍。 |
+
+三张均为 1254 × 1254 的透明 PNG，直接复用已确认的角色原图，没有重新生成或修改像素。当前 README 顶图显示宽度为 240 px，功能卡片为 130 px。来源与校验值见 [素材记录](assets/xiaodan/README.md)。
+
+## 应用 Logo
 
 两枚并肩的弹幕气泡共享一个播放三角：气泡对应直播互动与同担陪伴，播放三角对应一起观看直播，也呼应 DeltaStreamer 的三角形意象。
 
@@ -7,7 +21,7 @@
 ## 资产与应用
 
 - [Logo PNG 原图](../static/brand/ai-tongdan-logo.png)：1254 × 1254，带透明通道，保留生成工具的原始输出。
-- GitHub 仓库 README：160 × 160。
+- GitHub 仓库 README 目前采用上方的小担角色形象；应用 Logo 保留用于产品界面。
 - Web 应用页头：桌面 40 px、手机 36 px，由浏览器按比例缩放。
 - 浏览器 favicon 与 Apple touch icon：引用同一张 PNG。
 - 尚未连接直播时的播放器占位图：使用同一标志。

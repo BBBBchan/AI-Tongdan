@@ -2,3 +2,5 @@
 pytest>=8,<9
 pytest-asyncio>=0.24,<2
 playwright>=1.50,<2
+# Clipping audio unit tests; GPU inference dependencies remain optional.
+numpy>=1.26,<3

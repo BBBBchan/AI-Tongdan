@@ -1,6 +1,21 @@
 'use strict';
 (() => {
   const $ = (id) => document.getElementById(id);
+  async function loadWorkspaceTools() {
+    try {
+      const response = await fetch('/api/tools');
+      if (!response.ok) return;
+      const config = (await response.json()).clipping;
+      if (!config?.enabled || !Number.isInteger(config.port) || config.port < 1 || config.port > 65535) return;
+      const base = config.public_url ? new URL(config.public_url) : new URL(window.location.origin);
+      if (!['http:', 'https:'].includes(base.protocol) || base.username || base.password || base.search || base.hash) return;
+      if (!config.public_url) { base.port = String(config.port); base.pathname = '/'; }
+      if (!base.pathname.endsWith('/')) base.pathname += '/';
+      $('clipping-workspace-link').href = base.href;
+      $('clip-library-link').href = new URL('static/clips/index.html', base).href;
+      $('workspace-tools').hidden = false;
+    } catch { /* A companion-only server remains usable without navigation metadata. */ }
+  }
   const state = {session: {}, room: {}, playback: {}, observer: {}, observations: [], memory: {}, messages: [], danmaku: [], sent_danmaku: [], danmaku_status: {}, danmaku_send: {}, danmaku_candidates: {}, danmaku_chorus: {}, danmaku_auto: {}, danmaku_style: {value:30,revision:0,mode:'builtin'}, danmaku_corpus: {}, model: {}, audio: {segments: [], speakers: []}};
   const statusNames = {idle: '尚未连接', connecting: '连接中', waiting: '等待开播', live: '直播中', stopping: '正在断开', stopping_failed: '断开异常', stopped: '已断开', error: '连接异常', reconnecting: '重新连接中'};
   const observerNames = {waiting_frames: '等待下一帧', waiting_model: '未配置模型', retrying: '重试观察中', idle: '等待直播', waiting: '等待画面', running: '持续观察中', observing: '正在观察', thinking: '正在观察', active: '持续观察中', ready: '已就绪', connecting: '连接模型中', stopped: '观察已停止', error: '观察异常', unavailable: '模型不可用', disabled: '未配置模型', unconfigured: '未配置模型'};
@@ -1152,7 +1167,7 @@
   document.addEventListener('visibilitychange',() => { if (document.hidden) disconnectEvents(); else connectEvents(); });
   window.addEventListener('pageshow',event => { if (event.persisted) connectEvents(); });
   window.addEventListener('pagehide',() => { clearTimeout(playbackWatchdog); playbackWatchdog = null; disconnectEvents(); if (hls) { hls.destroy(); hls = null; playbackKey = ''; } });
-  switchTab('activity'); renderAll(); connectEvents();
+  switchTab('activity'); renderAll(); connectEvents(); void loadWorkspaceTools();
   setInterval(() => { if (!document.hidden && !refreshTimer) refreshState(); },15000);
   setInterval(() => { if (!document.hidden) { renderUnderstandingTiming(); if (danmakuPairing) renderDanmakuPairing(); } },1000);
 })();

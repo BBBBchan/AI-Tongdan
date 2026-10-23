@@ -56,3 +56,15 @@ The model download registry in [deploy/models.json](deploy/models.json) pins the
 - [funasr/campplus](https://huggingface.co/funasr/campplus)
 
 Silero VAD is installed through the `silero-vad` dependency; see [snakers4/silero-vad](https://github.com/snakers4/silero-vad) for its original license and notices. Live video, audio and audience messages belong to their respective rights holders and are not licensed by this project's source-code license.
+
+## Integrated clipping tools
+
+The `modules/clipping/` implementation was developed as a separate local workbench and is now distributed with AI-Tongdan under the same CC BY-NC 4.0 license. Its observer code derives from AI-Tongdan revision `d8015db`; see [the source notice](modules/clipping/clipper/observer/SOURCE_NOTICE.md). No production recordings, account cookies or private cluster deployment files are included.
+
+- Noto Sans CJK SC Bold: SIL Open Font License, downloaded by the asset setup script from [notofonts/noto-cjk](https://github.com/notofonts/noto-cjk); its OFL notice accompanies the font.
+- Clipping playback uses the repository's hls.js distribution and Apache notices described above.
+- `imageio-ffmpeg` supplies a separately installed FFmpeg build, potentially including GPL components; consult [imageio-ffmpeg](https://github.com/imageio/imageio-ffmpeg) for build/source information.
+- Optional Chinese OCR uses `rapidocr-onnxruntime` (Apache-2.0), from [RapidAI/RapidOCR](https://github.com/RapidAI/RapidOCR).
+- Strong subtitle recognition and timing use [Qwen3-ASR-1.7B](https://huggingface.co/Qwen/Qwen3-ASR-1.7B) and [Qwen3-ForcedAligner-0.6B](https://huggingface.co/Qwen/Qwen3-ForcedAligner-0.6B), whose model repositories specify Apache-2.0. Download revisions are in `deploy/models.json`.
+- The local gallery uses React, React DOM, Vite and Tailwind CSS (MIT) and Lucide icons (ISC). Dependencies and reproducible source are in `modules/clipping/local-library/`; bundled license notices are retained with the build.
+- Short reference titles retain their original source URLs in `reference_titles.json`; they are examples for editorial style, not this project's own videos.

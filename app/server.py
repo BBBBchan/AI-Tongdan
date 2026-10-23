@@ -38,6 +38,7 @@ from .journal import SessionJournal
 from .local_danmaku import LocalDanmakuBroker
 from .media import MediaCapture
 from .model import ModelBusy, VisionModel
+from .workspace_tools import tools_configuration
 
 
 def _fence_session_change(method):
@@ -1053,6 +1054,10 @@ def create_app(settings=None):
     @app.get("/api/state")
     async def state():
         return workspace.snapshot()
+
+    @app.get("/api/tools")
+    async def tools():
+        return tools_configuration()
 
     @app.post("/api/session")
     async def start_session(payload: SessionRequest):

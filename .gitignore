@@ -54,3 +54,12 @@ endpoint*.json
 *.flv
 *.m3u8
 *.zip
+
+# Optional clipping workspace: source only, no recordings or account state
+/modules/clipping/data/
+/modules/clipping/test-results/
+/modules/clipping/static/clips/library.json
+/modules/clipping/static/clips/*.tmp
+/modules/clipping/static/fonts/*.otf
+/modules/clipping/static/vendor/
+**/node_modules/

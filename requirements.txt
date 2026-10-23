@@ -5,3 +5,5 @@ websockets>=15,<16
 brotli>=1.2,<2
 Pillow>=11,<13
 python-dotenv>=1.1,<2
+imageio-ffmpeg>=0.6,<1
+python-multipart>=0.0.20,<1

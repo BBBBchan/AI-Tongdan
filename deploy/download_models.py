@@ -12,12 +12,12 @@ REGISTRY = Path(__file__).with_name("models.json")
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--component", choices=("vision", "audio", "all"), default="all")
+    parser.add_argument("--component", choices=("vision", "audio", "clipping-audio", "all"), default="all")
     parser.add_argument("--model-dir", type=Path, default=ROOT / "data/models")
     parser.add_argument("--dry-run", action="store_true", help="Print sources without downloading")
     args = parser.parse_args()
     registry = json.loads(REGISTRY.read_text())
-    names = {"vision": ["vision"], "audio": ["asr", "speaker"], "all": ["vision", "asr", "speaker"]}[args.component]
+    names = {"vision": ["vision"], "audio": ["asr", "speaker"], "clipping-audio": ["asr_clipping", "aligner", "speaker"], "all": ["vision", "asr", "speaker", "asr_clipping", "aligner"]}[args.component]
     destination = args.model_dir.expanduser().resolve()
     selected = {name: {**registry[name], "path": str(destination / registry[name]["directory"])} for name in names}
     if args.dry_run:

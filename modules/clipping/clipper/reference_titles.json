@@ -1,0 +1,146 @@
+{
+  "version": 1,
+  "research_date": "2026-10-21",
+  "examples": [
+    {
+      "bvid": "BV1Erng6mEEb",
+      "title": "大家线下都有点唯唯诺诺 应该跟我一样大大方方点别压抑自己【星瞳】",
+      "account_uid": "13490123",
+      "url": "https://www.bilibili.com/video/BV1Erng6mEEb/",
+      "technique": "保留具体观点本来的口气，不用“主播发表观点”作旁白。"
+    },
+    {
+      "bvid": "BV1P3Jt6MEU1",
+      "title": "瞳姐家的吹风机太难用了 还没我嘴吹的快呢 她还跟我说酒店的吹风机好用我寻思这孩子真没用过啥好玩意【折原露露】",
+      "account_uid": "13490123",
+      "url": "https://www.bilibili.com/video/BV1P3Jt6MEU1/",
+      "technique": "吐槽原话自己成立，长标题保留节奏，不再解释为什么好笑。"
+    },
+    {
+      "bvid": "BV1CuJq68EWU",
+      "title": "跟lulu天天喝奶茶果汁 在上海胖了四斤但一回家就掉秤了【星瞳】",
+      "account_uid": "13490123",
+      "url": "https://www.bilibili.com/video/BV1CuJq68EWU/",
+      "technique": "具体生活经历与变化，没有弹幕也能独立成为看点。"
+    },
+    {
+      "bvid": "BV1stJi6bEFD",
+      "title": "这个原来是入神进度吗 我还以为氛围灯呢 瞳姐终于出院了【星瞳】",
+      "account_uid": "13490123",
+      "url": "https://www.bilibili.com/video/BV1stJi6bEFD/",
+      "technique": "一句真实误会即可，不把前后过程写成报告。"
+    },
+    {
+      "bvid": "BV1PU411S75R",
+      "title": "梓神疑问恨子是人吗？是有关键词触发吗 怎么提一嘴星瞳就能切呢【阿梓】",
+      "account_uid": "13490123",
+      "url": "https://www.bilibili.com/video/BV1PU411S75R/",
+      "technique": "疑问口气与具体对象，不移植此例的人名和梗。"
+    },
+    {
+      "bvid": "BV1QNnL62EsT",
+      "title": "阿梓纠结买饰品，梓神和梓魔吵起来了",
+      "account_uid": "274089",
+      "url": "https://www.bilibili.com/video/BV1QNnL62EsT/",
+      "technique": "一个纠结点和片内人物梗，不解释完整心理过程。"
+    },
+    {
+      "bvid": "BV1aHJb6JEw5",
+      "title": "阿梓：每次一想到扛刀小弟，就想到我跟雪糕一起打游戏的时候，我一杀人雪糕就大喊NB",
+      "account_uid": "274089",
+      "url": "https://www.bilibili.com/video/BV1aHJb6JEw5/",
+      "technique": "有具体关系和动作的回忆可以直接作标题。"
+    },
+    {
+      "bvid": "BV1dtwTzPEys",
+      "title": "阿梓：豆包我对你凶吗，你以后要是统治地球了别杀我好吗",
+      "account_uid": "274089",
+      "url": "https://www.bilibili.com/video/BV1dtwTzPEys/",
+      "technique": "保留对话中有趣的一句，不额外编结果。"
+    },
+    {
+      "bvid": "BV1LeiqBHEn7",
+      "title": "阿梓：现在好少喝酒了，以前是真的往死里喝，喝到每天起床都要吐",
+      "account_uid": "274089",
+      "url": "https://www.bilibili.com/video/BV1LeiqBHEn7/",
+      "technique": "经历与观点不必硬制造翻车或弹幕笑声。"
+    },
+    {
+      "bvid": "BV1NGk9BAEro",
+      "title": "阿梓：叫妈妈。951：妈妈",
+      "account_uid": "274089",
+      "url": "https://www.bilibili.com/video/BV1NGk9BAEro/",
+      "technique": "确切两人的极短对话，未知话者不可套署名。"
+    },
+    {
+      "bvid": "BV1cznG6oEja",
+      "title": "【阿梓】中之人是迈克尔杰克逊.嗷！",
+      "account_uid": "5109111",
+      "url": "https://www.bilibili.com/video/BV1cznG6oEja/",
+      "technique": "短标题抓单个动作或原话，不强制长因果句。"
+    },
+    {
+      "bvid": "BV1yhJB6NEqe",
+      "title": "【阿梓】看到游客说门票特别实惠，直接开圈从7$涨到100$",
+      "account_uid": "5109111",
+      "url": "https://www.bilibili.com/video/BV1yhJB6NEqe/",
+      "technique": "可核实的游戏操作与数字，比泛泛翻车更明确。"
+    },
+    {
+      "bvid": "BV1VGJB67Erq",
+      "title": "【阿梓】改造动物园搓出一个雷霆大土球没绷住",
+      "account_uid": "5109111",
+      "url": "https://www.bilibili.com/video/BV1VGJB67Erq/",
+      "technique": "画面里的具体物件就是看点，不写现场解释场面。"
+    },
+    {
+      "bvid": "BV1TsJB6uEYz",
+      "title": "【阿梓】被吐槽动物园门口设计急了😤：你懂鸡毛！看着就高档我都怕你不敢走进去",
+      "account_uid": "5109111",
+      "url": "https://www.bilibili.com/video/BV1TsJB6uEYz/",
+      "technique": "留下有辨识度的真实回应，不改成情绪分析。"
+    },
+    {
+      "bvid": "BV1FF7TzEEo1",
+      "title": "【梨安】全程难绷自己的二创《梨 氏 料 理》料理界俄史皇帝了属于是",
+      "account_uid": "5109111",
+      "url": "https://www.bilibili.com/video/BV1FF7TzEEo1/",
+      "technique": "观看内容的具体对象与反应，不把视频人物当主播。"
+    },
+    {
+      "bvid": "BV1uaph6wErv",
+      "title": "🫧小小海小妹吹泡泡 【七海Nana7mi】",
+      "account_uid": "896830",
+      "url": "https://www.bilibili.com/video/BV1uaph6wErv/",
+      "technique": "明确活动可以用简单标题，不必凑大故事。"
+    },
+    {
+      "bvid": "BV1jz4y1J7VM",
+      "title": "苹果的产品自带芳香【七海Nana7mi】",
+      "account_uid": "896830",
+      "url": "https://www.bilibili.com/video/BV1jz4y1J7VM/",
+      "technique": "一句具体观察，保持话题本来口气。"
+    },
+    {
+      "bvid": "BV1bj411U7u9",
+      "title": "和阿梓漂流被初中生叫美女【七海Nana7mi】",
+      "account_uid": "896830",
+      "url": "https://www.bilibili.com/video/BV1bj411U7u9/",
+      "technique": "生活经历的有趣细节，不必先交代主播聊起。"
+    },
+    {
+      "bvid": "BV1CipP6CEnK",
+      "title": "秋神：太好了我们可以同时到达！七海：我去好变态！【七海Nana7mi】",
+      "account_uid": "896830",
+      "url": "https://www.bilibili.com/video/BV1CipP6CEnK/",
+      "technique": "两句对话的反差，话者和原话必须有证据。"
+    },
+    {
+      "bvid": "BV1e2Hx6pEAu",
+      "title": "七海Part：你觉得我素质咋样？【联动没问题】",
+      "account_uid": "896830",
+      "url": "https://www.bilibili.com/video/BV1e2Hx6pEAu/",
+      "technique": "问题本身足够具体时直接用问题，不补虚构回答。"
+    }
+  ]
+}

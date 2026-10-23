@@ -1,0 +1,3 @@
+# Local Chinese chat recognition. Models ship with the package; no service or API key.
+-r requirements.txt
+rapidocr-onnxruntime==1.4.4

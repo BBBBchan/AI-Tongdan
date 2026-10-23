@@ -1,0 +1,5 @@
+-r requirements.txt
+pytest>=8,<9
+pytest-asyncio>=0.24,<2
+numpy>=1.26,<3
+playwright>=1.50,<2

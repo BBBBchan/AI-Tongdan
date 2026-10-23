@@ -16,5 +16,17 @@
     "revision": "e4b6ede7ce16997aff4ae69fbca1f0175e2afede",
     "directory": "campplus",
     "license": "Apache-2.0"
+  },
+  "asr_clipping": {
+    "repo": "Qwen/Qwen3-ASR-1.7B",
+    "revision": "7278e1e70fe206f11671096ffdd38061171dd6e5",
+    "directory": "Qwen3-ASR-1.7B",
+    "license": "Apache-2.0"
+  },
+  "aligner": {
+    "repo": "Qwen/Qwen3-ForcedAligner-0.6B",
+    "revision": "c7cbfc2048c462b0d63a45797104fc9db3ad62b7",
+    "directory": "Qwen3-ForcedAligner-0.6B",
+    "license": "Apache-2.0"
   }
 }
